@@ -59,6 +59,11 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
   int? _hoveredNodeIndex;
   Offset? _hoverPos;
 
+  // Active transformation trackers for UI tooltips
+  double? _currentRotationAngle;
+  double? _currentScaleX;
+  double? _currentScaleY;
+
   bool _hasDragged = false;
   final double _hitTolerance = 12.0;
 
@@ -338,6 +343,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
       _activeHandle = HandleType.none;
       _marqueeStart = null;
       _marqueeEnd = null;
+      _currentRotationAngle = null;
+      _currentScaleX = null;
+      _currentScaleY = null;
     });
   }
 
@@ -459,6 +467,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                           _marqueeEnd = logicalPos;
                           _draggingItemId = null;
                           _activeHandle = HandleType.none;
+                          _currentRotationAngle = null;
+                          _currentScaleX = null;
+                          _currentScaleY = null;
                         });
                       } else {
                         if (!workspace.selectedItemIds.contains(hit.itemId)) {
@@ -471,6 +482,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                         _draggingNodeIndex = hit.nodeIndex;
                         _dragOriginalItemsState.clear();
                         _dragStartRects.clear();
+                        _currentRotationAngle = null;
+                        _currentScaleX = null;
+                        _currentScaleY = null;
                         
                         final selectedItems = ref.read(workspaceProvider.notifier).selectedItems;
 
@@ -497,6 +511,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                     try {
                       if (details.delta.distance > 0) _hasDragged = true;
                       final logicalPos = _getLogicalPosition(details.localPosition, canvasSize);
+                      
+                      // Keep track of cursor position during drag for HUD rendering
+                      setState(() { _hoverPos = logicalPos; });
 
                       if (_marqueeStart != null) {
                         setState(() => _marqueeEnd = logicalPos);
@@ -533,14 +550,15 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                            final startVec = _dragStartLocalPosition! - center;
                            final currentVec = logicalPos - center;
                            
-                           double currentAngle = math.atan2(currentVec.dy, currentVec.dx);
+                           double rawAngleDelta = math.atan2(currentVec.dy, currentVec.dx) - math.atan2(startVec.dy, startVec.dx);
+                           double angleDelta = rawAngleDelta;
                            
                            if (!isCtrl) {
                               double snapAngle = math.pi / 12; // 15 degrees
-                              currentAngle = (currentAngle / snapAngle).round() * snapAngle;
+                              angleDelta = (rawAngleDelta / snapAngle).round() * snapAngle;
                            }
 
-                           final angleDelta = currentAngle - math.atan2(startVec.dy, startVec.dx);
+                           setState(() { _currentRotationAngle = angleDelta; });
 
                            final rotatedItem = TransformUtils.rotateItem(original, angleDelta, center);
                            ref.read(workspaceProvider.notifier).updateItem(rotatedItem);
@@ -609,6 +627,11 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                                 scaleX = scaleX < 0 ? -maxScale : maxScale;
                                 scaleY = scaleY < 0 ? -maxScale : maxScale;
                               }
+                              
+                              setState(() {
+                                _currentScaleX = scaleX;
+                                _currentScaleY = scaleY;
+                              });
 
                               Offset origin = combinedRect.center;
                               if (_activeHandle == HandleType.topLeft) origin = combinedRect.bottomRight;
@@ -702,11 +725,69 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                              }
 
                              if (workspace.snapToGrid) {
-                                 if (_activeHandle.name.toLowerCase().contains('left')) left = _snap(left, workspace.gridSnapSize);
-                                 if (_activeHandle.name.toLowerCase().contains('top')) top = _snap(top, workspace.gridSnapSize);
-                                 if (_activeHandle.name.toLowerCase().contains('right')) right = _snap(right, workspace.gridSnapSize);
-                                 if (_activeHandle.name.toLowerCase().contains('bottom')) bottom = _snap(bottom, workspace.gridSnapSize);
+                                 Offset snapLocalPointToGlobalGrid(Offset localPoint) {
+                                     Offset globalP = MatrixUtils.transformPoint(item.transform, localPoint);
+                                     Offset snappedGlobal = Offset(_snap(globalP.dx, workspace.gridSnapSize), _snap(globalP.dy, workspace.gridSnapSize));
+                                     return MatrixUtils.transformPoint(inverse, snappedGlobal);
+                                 }
+
+                                 if (_activeHandle == HandleType.leftEdge) left = snapLocalPointToGlobalGrid(Offset(left, itemRect.center.dy)).dx;
+                                 if (_activeHandle == HandleType.rightEdge) right = snapLocalPointToGlobalGrid(Offset(right, itemRect.center.dy)).dx;
+                                 if (_activeHandle == HandleType.topEdge) top = snapLocalPointToGlobalGrid(Offset(itemRect.center.dx, top)).dy;
+                                 if (_activeHandle == HandleType.bottomEdge) bottom = snapLocalPointToGlobalGrid(Offset(itemRect.center.dx, bottom)).dy;
+                                 
+                                 if (_activeHandle == HandleType.topLeft) {
+                                     var p = snapLocalPointToGlobalGrid(Offset(left, top));
+                                     left = p.dx; top = p.dy;
+                                 }
+                                 if (_activeHandle == HandleType.topRight) {
+                                     var p = snapLocalPointToGlobalGrid(Offset(right, top));
+                                     right = p.dx; top = p.dy;
+                                 }
+                                 if (_activeHandle == HandleType.bottomLeft) {
+                                     var p = snapLocalPointToGlobalGrid(Offset(left, bottom));
+                                     left = p.dx; bottom = p.dy;
+                                 }
+                                 if (_activeHandle == HandleType.bottomRight) {
+                                     var p = snapLocalPointToGlobalGrid(Offset(right, bottom));
+                                     right = p.dx; bottom = p.dy;
+                                 }
                              }
+
+                             double origWidth = itemRect.width == 0 ? 1 : itemRect.width;
+                             double origHeight = itemRect.height == 0 ? 1 : itemRect.height;
+
+                             // Single-item Proportional Scale Override
+                             bool isCorner = _activeHandle == HandleType.topLeft || _activeHandle == HandleType.topRight || _activeHandle == HandleType.bottomLeft || _activeHandle == HandleType.bottomRight;
+                             if (HardwareKeyboard.instance.isShiftPressed && isCorner) {
+                                 double scaleX = (right - left) / origWidth;
+                                 double scaleY = (bottom - top) / origHeight;
+                                 double maxScale = math.max(scaleX.abs(), scaleY.abs());
+                                 
+                                 // Preserve sign orientation
+                                 scaleX = scaleX < 0 ? -maxScale : maxScale;
+                                 scaleY = scaleY < 0 ? -maxScale : maxScale;
+
+                                 if (_activeHandle == HandleType.topLeft) { 
+                                     left = right - (origWidth * scaleX); 
+                                     top = bottom - (origHeight * scaleY); 
+                                 } else if (_activeHandle == HandleType.topRight) { 
+                                     right = left + (origWidth * scaleX); 
+                                     top = bottom - (origHeight * scaleY); 
+                                 } else if (_activeHandle == HandleType.bottomLeft) { 
+                                     left = right - (origWidth * scaleX); 
+                                     bottom = top + (origHeight * scaleY); 
+                                 } else if (_activeHandle == HandleType.bottomRight) { 
+                                     right = left + (origWidth * scaleX); 
+                                     bottom = top + (origHeight * scaleY); 
+                                 }
+                             }
+
+                             // Calculate UI Tooltip scales based on final bounds
+                             setState(() {
+                               _currentScaleX = (right - left).abs() / origWidth;
+                               _currentScaleY = (bottom - top).abs() / origHeight;
+                             });
                    
                              final newRect = Rect.fromLTRB(
                                left < right ? left : right, top < bottom ? top : bottom,
@@ -715,7 +796,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
 
                              CanvasPaint currentPaint = item.paint;
                              if (isShiftCtrl && _activeHandle != HandleType.move) {
-                                double origWidth = itemRect.width == 0 ? 1 : itemRect.width;
                                 double changedWidth = (right - left).abs();
                                 double scale = changedWidth / origWidth;
                                 final newStroke = _dragOriginalItemsState[item.id]!.paint.strokeWidth * scale;
@@ -730,23 +810,37 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                             List<PathNode> newNodes = _dragStartNodes!.map((n) => PathNode(position: n.position, controlPoint1: n.controlPoint1, controlPoint2: n.controlPoint2)).toList();
                             final i = _draggingNodeIndex!;
                               
+                            Offset snapLocalPointToGlobalGrid(Offset localPoint) {
+                                Offset globalP = MatrixUtils.transformPoint(item.transform, localPoint);
+                                Offset snappedGlobal = Offset(_snap(globalP.dx, workspace.gridSnapSize), _snap(globalP.dy, workspace.gridSnapSize));
+                                return MatrixUtils.transformPoint(inverse, snappedGlobal);
+                            }
+
                             if (_activeHandle == HandleType.pathEdge) {
                               int nextIndex = (i + 1) % newNodes.length;
-                              void moveNode(int idx) {
-                                Offset targetPos = _dragStartNodes![idx].position + localDelta;
-                                if (workspace.snapToGrid) targetPos = Offset(_snap(targetPos.dx, workspace.gridSnapSize), _snap(targetPos.dy, workspace.gridSnapSize));
-                                
-                                newNodes[idx].position = targetPos;
-                                if (newNodes[idx].controlPoint1 != null) newNodes[idx].controlPoint1 = _dragStartNodes![idx].controlPoint1! + localDelta;
-                                if (newNodes[idx].controlPoint2 != null) newNodes[idx].controlPoint2 = _dragStartNodes![idx].controlPoint2! + localDelta;
+                              Offset targetPos1 = _dragStartNodes![i].position + localDelta;
+                              Offset finalLocalDelta = localDelta;
+
+                              if (workspace.snapToGrid) {
+                                  Offset snappedPos1 = snapLocalPointToGlobalGrid(targetPos1);
+                                  finalLocalDelta = snappedPos1 - _dragStartNodes![i].position;
                               }
-                              moveNode(i); moveNode(nextIndex);
+
+                              void applyDelta(int idx) {
+                                newNodes[idx].position = _dragStartNodes![idx].position + finalLocalDelta;
+                                if (newNodes[idx].controlPoint1 != null) newNodes[idx].controlPoint1 = _dragStartNodes![idx].controlPoint1! + finalLocalDelta;
+                                if (newNodes[idx].controlPoint2 != null) newNodes[idx].controlPoint2 = _dragStartNodes![idx].controlPoint2! + finalLocalDelta;
+                              }
+                              applyDelta(i); 
+                              applyDelta(nextIndex);
                             } 
                             else if (_activeHandle == HandleType.pathNode) {
                               var newPos = _dragStartNodes![i].position + localDelta;
+                              Offset snappedDelta = localDelta;
                               
                               if (workspace.snapToGrid) {
-                                  newPos = Offset(_snap(newPos.dx, workspace.gridSnapSize), _snap(newPos.dy, workspace.gridSnapSize));
+                                  newPos = snapLocalPointToGlobalGrid(newPos);
+                                  snappedDelta = newPos - _dragStartNodes![i].position;
                               }
                               
                               bool snappedToClose = false;
@@ -760,17 +854,17 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                                  }
                               }
                               newNodes[i].position = newPos;
-                              if (newNodes[i].controlPoint1 != null) newNodes[i].controlPoint1 = _dragStartNodes![i].controlPoint1! + localDelta;
-                              if (newNodes[i].controlPoint2 != null) newNodes[i].controlPoint2 = _dragStartNodes![i].controlPoint2! + localDelta;
+                              if (newNodes[i].controlPoint1 != null) newNodes[i].controlPoint1 = _dragStartNodes![i].controlPoint1! + snappedDelta;
+                              if (newNodes[i].controlPoint2 != null) newNodes[i].controlPoint2 = _dragStartNodes![i].controlPoint2! + snappedDelta;
                             }
                             else if (_activeHandle == HandleType.pathControl1 && _dragStartNodes![i].controlPoint1 != null) {
                               var newPos = _dragStartNodes![i].controlPoint1! + localDelta;
-                              if (workspace.snapToGrid) newPos = Offset(_snap(newPos.dx, workspace.gridSnapSize), _snap(newPos.dy, workspace.gridSnapSize));
+                              if (workspace.snapToGrid) newPos = snapLocalPointToGlobalGrid(newPos);
                               newNodes[i].controlPoint1 = newPos;
                             }
                             else if (_activeHandle == HandleType.pathControl2 && _dragStartNodes![i].controlPoint2 != null) {
                               var newPos = _dragStartNodes![i].controlPoint2! + localDelta;
-                              if (workspace.snapToGrid) newPos = Offset(_snap(newPos.dx, workspace.gridSnapSize), _snap(newPos.dy, workspace.gridSnapSize));
+                              if (workspace.snapToGrid) newPos = snapLocalPointToGlobalGrid(newPos);
                               newNodes[i].controlPoint2 = newPos;
                             } 
                   
@@ -873,6 +967,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                       isTransformMode: workspace.isTransformMode,
                       variables: workspace.variables, 
                       marqueeRect: _marqueeStart != null && _marqueeEnd != null ? Rect.fromPoints(_marqueeStart!, _marqueeEnd!) : null,
+                      currentRotationAngle: _currentRotationAngle,
+                      currentScaleX: _currentScaleX,
+                      currentScaleY: _currentScaleY,
                     ),
                     size: canvasSize,
                   ),

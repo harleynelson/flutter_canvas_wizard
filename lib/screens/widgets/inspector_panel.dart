@@ -2,6 +2,7 @@
 // Description: Advanced property editor overhauled with Accordions, better terminology, and designer-friendly grouping. Added Flip and Rotate Quick Actions.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:math' as math;
 import '../../state/workspace_provider.dart';
@@ -77,101 +78,115 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     final item = findItemRecursive(workspace.items, selectedId) ?? 
                  RectItem(id: 'err', name: 'Error', rect: Rect.zero, paint: CanvasPaint());
 
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 24.0),
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('ID: ${item.id}', style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace')),
-              const SizedBox(height: 8),
-              _buildStringRow('Name', item.name, (val) {
-                if (item is RectItem) {
-                  _updateItem(RectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
-                } else if (item is RRectItem) {
-                  _updateItem(RRectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect, radius: item.radius), item);
-                } else if (item is OvalItem) {
-                  _updateItem(OvalItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
-                } else if (item is PathItem) {
-                  _updateItem(PathItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed), item);
-                } else if (item is TextItem) {
-                  _updateItem(TextItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
-                } else if (item is LogicGroupItem) {
-                  _updateItem(LogicGroupItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, condition: item.condition, children: item.children), item);
-                }
-              }),
-            ],
-          ),
-        ),
-
-        if (item is RectItem || item is RRectItem || item is OvalItem || item is PathItem || item is TextItem)
-          PropertyAccordion(
-            title: item is PathItem ? 'Transform & Path' : 'Transform & Data',
-            initiallyExpanded: true,
-            children: [
-              _buildUnifiedTransformFields(item),
-            ],
-          ),
-
-        if (item is! LogicGroupItem)
-          PropertyAccordion(
-            title: 'Appearance',
-            initiallyExpanded: true,
-            children: [
-              _buildPaintSection(item),
-            ],
-          ),
-
-        if (item is! LogicGroupItem && item is! TextItem)
-          PropertyAccordion(
-            title: '3D Extrusion',
-            initiallyExpanded: false,
-            children: [
-              _buildExtrusionSection(item),
-            ],
-          ),
-
-        PropertyAccordion(
-          title: 'Timeline Visibility',
-          initiallyExpanded: item.enabledIf != null,
-          children: [
-            _buildVisibilitySection(item),
-          ],
-        ),
-
-        PropertyAccordion(
-          title: 'Actions',
-          initiallyExpanded: true,
-          children: [
-            _buildQuickTransformSection(item),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent.withOpacity(0.15),
-                foregroundColor: Colors.redAccent,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                minimumSize: const Size(double.infinity, 40),
-              ),
-              icon: const Icon(Icons.delete_outline, size: 18),
-              label: const Text('Delete Item'),
-              onPressed: () {
-                try {
-                  final parentId = ref.read(workspaceProvider.notifier).getParentId(item.id);
-                  ref.read(historyProvider.notifier).execute(
-                    RemoveCommand(item, parentId, ref.read(workspaceProvider.notifier))
-                  );
-                } catch(e) {
-                  print('DEBUG ERROR: Delete button failed: $e');
-                }
-              },
+    // Wrap the ListView in a Focus node to intercept escaped keystrokes
+    return Focus(
+      canRequestFocus: false, // Prevents this wrapper from stealing focus
+      onKeyEvent: (node, event) {
+        if (event.logicalKey == LogicalKeyboardKey.delete ||
+            event.logicalKey == LogicalKeyboardKey.backspace) {
+          // Swallow the event so it doesn't bubble up to the global Workspace
+          return KeyEventResult.skipRemainingHandlers;
+        }
+        return KeyEventResult.ignored;
+      },
+      child: ListView(
+        padding: const EdgeInsets.only(bottom: 24.0),
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('ID: ${item.id}', style: const TextStyle(color: Colors.white38, fontSize: 10, fontFamily: 'monospace')),
+                const SizedBox(height: 8),
+                _buildStringRow('Name', item.name, (val) {
+                  if (item is RectItem) {
+                    _updateItem(RectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
+                  } else if (item is RRectItem) {
+                    _updateItem(RRectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect, radius: item.radius), item);
+                  } else if (item is OvalItem) {
+                    _updateItem(OvalItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
+                  } else if (item is PathItem) {
+                    _updateItem(PathItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed), item);
+                  } else if (item is TextItem) {
+                    _updateItem(TextItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
+                  } else if (item is LogicGroupItem) {
+                    _updateItem(LogicGroupItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, condition: item.condition, children: item.children), item);
+                  }
+                }),
+              ],
             ),
-          ],
-        ),
-      ],
+          ),
+
+          if (item is RectItem || item is RRectItem || item is OvalItem || item is PathItem || item is TextItem)
+            PropertyAccordion(
+              title: item is PathItem ? 'Transform & Path' : 'Transform & Data',
+              initiallyExpanded: true,
+              children: [
+                _buildUnifiedTransformFields(item),
+              ],
+            ),
+
+          if (item is! LogicGroupItem)
+            PropertyAccordion(
+              title: 'Appearance',
+              initiallyExpanded: true,
+              children: [
+                _buildPaintSection(item),
+              ],
+            ),
+
+          if (item is! LogicGroupItem && item is! TextItem)
+            PropertyAccordion(
+              title: '3D Extrusion',
+              initiallyExpanded: false,
+              children: [
+                _buildExtrusionSection(item),
+              ],
+            ),
+
+          PropertyAccordion(
+            title: 'Timeline Visibility',
+            initiallyExpanded: item.enabledIf != null,
+            children: [
+              _buildVisibilitySection(item),
+            ],
+          ),
+
+          PropertyAccordion(
+            title: 'Actions',
+            initiallyExpanded: true,
+            children: [
+              _buildQuickTransformSection(item),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent.withOpacity(0.15),
+                  foregroundColor: Colors.redAccent,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  minimumSize: const Size(double.infinity, 40),
+                ),
+                icon: const Icon(Icons.delete_outline, size: 18),
+                label: const Text('Delete Item'),
+                onPressed: () {
+                  try {
+                    final parentId = ref.read(workspaceProvider.notifier).getParentId(item.id);
+                    ref.read(historyProvider.notifier).execute(
+                      RemoveCommand(item, parentId, ref.read(workspaceProvider.notifier))
+                    );
+                  } catch(e) {
+                    print('DEBUG ERROR: Delete button failed: $e');
+                  }
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
+
+  
 
   Widget _buildUnifiedTransformFields(CanvasItem item) {
     try {
@@ -179,37 +194,111 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildNumberRow('Global X', bounds.left, (val) {
-            final delta = val - bounds.left;
-            _updateItem(TransformUtils.translateItem(item, Offset(delta, 0)), item);
-          }),
-          _buildNumberRow('Global Y', bounds.top, (val) {
-            final delta = val - bounds.top;
-            _updateItem(TransformUtils.translateItem(item, Offset(0, delta)), item);
-          }),
-          _buildNumberRow('Width', bounds.width, (val) {
-            if (val <= 0) return;
-            final scaleX = bounds.width == 0 ? 1.0 : val / bounds.width;
-            _updateItem(TransformUtils.stretchItem(item, scaleX, 1.0, bounds.centerLeft), item);
-          }),
-          _buildNumberRow('Height', bounds.height, (val) {
-            if (val <= 0) return;
-            final scaleY = bounds.height == 0 ? 1.0 : val / bounds.height;
-            _updateItem(TransformUtils.stretchItem(item, 1.0, scaleY, bounds.topCenter), item);
-          }),
+          Row(
+            children: [
+              Expanded(
+                child: _buildNumberRow('W', bounds.width, (val) {
+                  if (val <= 0) return;
+                  final scaleX = bounds.width == 0 ? 1.0 : val / bounds.width;
+                  _updateItem(TransformUtils.stretchItem(item, scaleX, 1.0, bounds.centerLeft), item);
+                }, labelWidth: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildNumberRow('H', bounds.height, (val) {
+                  if (val <= 0) return;
+                  final scaleY = bounds.height == 0 ? 1.0 : val / bounds.height;
+                  _updateItem(TransformUtils.stretchItem(item, 1.0, scaleY, bounds.topCenter), item);
+                }, labelWidth: 24),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: _buildNumberRow('X', bounds.left, (val) {
+                  final delta = val - bounds.left;
+                  _updateItem(TransformUtils.translateItem(item, Offset(delta, 0)), item);
+                }, labelWidth: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _buildNumberRow('Y', bounds.top, (val) {
+                  final delta = val - bounds.top;
+                  _updateItem(TransformUtils.translateItem(item, Offset(0, delta)), item);
+                }, labelWidth: 24),
+              ),
+            ],
+          ),
+          
+          const SizedBox(height: 16),
+          const Text('Bounding Box Corners', style: TextStyle(color: Colors.white54, fontSize: 11)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _buildCornerDisplay('TL', bounds.topLeft)),
+              const SizedBox(width: 8),
+              Expanded(child: _buildCornerDisplay('TR', bounds.topRight)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: _buildCornerDisplay('BL', bounds.bottomLeft)),
+              const SizedBox(width: 8),
+              Expanded(child: _buildCornerDisplay('BR', bounds.bottomRight)),
+            ],
+          ),
           
           const Divider(color: Colors.white12, height: 24),
 
           if (item is RRectItem) ... [
-            InspectorSlider(
-              label: 'Corner Radius',
-              value: item.radius,
-              min: 0,
-              max: 100,
-              onChanged: (val) {
-                 _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: val, transform: item.transform), item);
-              },
+            Row(
+              children: [
+                const SizedBox(
+                  width: 80, 
+                  child: Text('Radius', style: TextStyle(color: Colors.white70, fontSize: 12))
+                ),
+                Expanded(
+                  child: Slider(
+                    value: item.radius.clamp(0.0, 100.0),
+                    min: 0,
+                    max: 100,
+                    activeColor: Colors.blueAccent,
+                    onChanged: (val) {
+                       _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: val, transform: item.transform), item);
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 50,
+                  height: 30,
+                  child: TextFormField(
+                    key: ValueKey('radius_input_${item.radius}'),
+                    initialValue: item.radius.toStringAsFixed(1),
+                    style: const TextStyle(fontSize: 12, color: Colors.white),
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                      border: OutlineInputBorder(),
+                      filled: true,
+                      fillColor: Colors.black26,
+                    ),
+                    onFieldSubmitted: (val) {
+                      try {
+                        final doubleVal = double.tryParse(val);
+                        if (doubleVal != null) {
+                          _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: doubleVal.clamp(0.0, 100.0), transform: item.transform), item);
+                        }
+                      } catch (e) {
+                         print('DEBUG ERROR: Radius text input failed: $e');
+                      }
+                    },
+                  ),
+                ),
+              ],
             ),
+            const SizedBox(height: 12),
           ],
           if (item is PathItem) _buildPathFields(item),
           if (item is TextItem) _buildTextSpecificFields(item),
@@ -217,6 +306,79 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
       );
     } catch (e) {
       print('DEBUG ERROR: _buildUnifiedTransformFields failed: $e');
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildCornerDisplay(String label, Offset offset) {
+    try {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: Colors.white10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10, fontWeight: FontWeight.bold)),
+            Text(
+              '${offset.dx.toStringAsFixed(1)}, ${offset.dy.toStringAsFixed(1)}',
+              style: const TextStyle(color: Colors.white70, fontSize: 10, fontFamily: 'monospace'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      print('DEBUG ERROR: _buildCornerDisplay failed: $e');
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildStringRow(String label, String value, Function(String) onSubmitted, {String? hint, double labelWidth = 80}) {
+    try {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8.0),
+        child: Row(
+          children: [
+            SizedBox(width: labelWidth, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12))),
+            Expanded(
+              child: SizedBox(
+                height: 30,
+                child: TextFormField(
+                  key: ValueKey('${label}_$value'),
+                  initialValue: value,
+                  style: const TextStyle(fontSize: 12, color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: hint,
+                    hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    border: const OutlineInputBorder(),
+                    filled: true,
+                    fillColor: Colors.black26,
+                  ),
+                  onFieldSubmitted: onSubmitted,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      print('DEBUG ERROR: _buildStringRow failed: $e');
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildNumberRow(String label, double value, Function(double) onSubmitted, {double labelWidth = 80}) {
+    try {
+      return _buildStringRow(label, value.toStringAsFixed(1), (strVal) {
+        final doubleVal = double.tryParse(strVal);
+        if (doubleVal != null) onSubmitted(doubleVal);
+      }, labelWidth: labelWidth);
+    } catch (e) {
+      print('DEBUG ERROR: _buildNumberRow failed: $e');
       return const SizedBox.shrink();
     }
   }
@@ -640,40 +802,4 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
-  Widget _buildStringRow(String label, String value, Function(String) onSubmitted, {String? hint}) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
-        children: [
-          SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12))),
-          Expanded(
-            child: SizedBox(
-              height: 30,
-              child: TextFormField(
-                key: ValueKey('${label}_$value'),
-                initialValue: value,
-                style: const TextStyle(fontSize: 12, color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: hint,
-                  hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
-                  border: const OutlineInputBorder(),
-                  filled: true,
-                  fillColor: Colors.black26,
-                ),
-                onFieldSubmitted: onSubmitted,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNumberRow(String label, double value, Function(double) onSubmitted) {
-    return _buildStringRow(label, value.toStringAsFixed(1), (strVal) {
-      final doubleVal = double.tryParse(strVal);
-      if (doubleVal != null) onSubmitted(doubleVal);
-    });
-  }
 }

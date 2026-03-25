@@ -52,7 +52,7 @@ class CanvasPaint {
     this.strokeWidth = 0.0,
     this.fillColorParam,
     this.strokeColorParam,
-    this.strokeCap = StrokeCap.butt,
+    this.strokeCap = StrokeCap.round,
     this.blendMode = BlendMode.srcOver,
     this.extrusionSteps = 0,
     this.extrusionOffset = const Offset(0, 1),

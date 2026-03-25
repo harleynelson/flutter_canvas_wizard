@@ -1,5 +1,5 @@
 // File: lib/screens/widgets/canvas_renderer.dart
-// Description: Renders the models applying their Matrix4 transformations, and overlays rotated interactive highlighting elements. Now separates Fill/Stroke to maintain unscaled stroke widths.
+// Description: Renders the models applying their Matrix4 transformations, and overlays rotated interactive highlighting elements. Added sleek enterprise HUD tracking for Rotations and Scales.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -29,6 +29,10 @@ class EditorCanvasPainter extends CustomPainter {
   final Rect? marqueeRect; 
   final bool isExportMode;
 
+  final double? currentRotationAngle;
+  final double? currentScaleX;
+  final double? currentScaleY;
+
   EditorCanvasPainter({
     required this.items,
     this.selectedItemIds = const {},
@@ -44,6 +48,9 @@ class EditorCanvasPainter extends CustomPainter {
     this.variables = const {},
     this.marqueeRect,
     this.isExportMode = false,
+    this.currentRotationAngle,
+    this.currentScaleX,
+    this.currentScaleY,
   });
 
   @override
@@ -87,33 +94,165 @@ class EditorCanvasPainter extends CustomPainter {
           canvas.drawRect(marqueeRect!, paintStroke);
         }
 
-        // --- NEW: Draw Rotation Snap Lines ---
-        if (activeHandle == HandleType.rotate && selectedItemIds.isNotEmpty) {
-           bool isCtrl = HardwareKeyboard.instance.isControlPressed;
-           if (!isCtrl) {
-              final selectedItems = _findItemsRecursive(items, selectedItemIds);
-              final bounds = BoundingBoxUtils.getCombinedRect(selectedItems);
-              if (bounds != Rect.zero) {
-                  final center = bounds.center;
-                  final radius = math.max(bounds.width, bounds.height) + (100.0 / cameraZoom);
-                  
-                  final snapPaint = Paint()..color = Colors.white.withOpacity(0.15)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
-                  final boldSnapPaint = Paint()..color = Colors.cyanAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
+        // --- HUD Overlays for Transforms ---
+        _drawEnterpriseHUD(canvas, selectedItems);
 
-                  for (int i = 0; i < 24; i++) {
-                      double angle = i * (math.pi / 12);
-                      Offset endPoint = center + Offset(math.cos(angle) * radius, math.sin(angle) * radius);
-                      // Make major axes slightly more visible
-                      canvas.drawLine(center, endPoint, i % 6 == 0 ? boldSnapPaint : snapPaint);
-                  }
-              }
-           }
-        }
       }
       
       canvas.restore();
     } catch (e) {
       print('DEBUG ERROR: EditorCanvasPainter.paint failed: $e');
+    }
+  }
+
+  /// Draws a sleek, floating dark-themed tooltip adjacent to the active cursor
+  void _drawTooltip(Canvas canvas, Offset position, String text) {
+    try {
+      final textStyle = TextStyle(color: Colors.white, fontSize: 11 / cameraZoom, fontWeight: FontWeight.bold);
+      final textPainter = TextPainter(text: TextSpan(text: text, style: textStyle), textDirection: TextDirection.ltr);
+      textPainter.layout();
+
+      // Slightly offset from the handle so it doesn't overlap the mouse
+      final bgRect = Rect.fromCenter(
+        center: position + Offset(0, -28 / cameraZoom),
+        width: textPainter.width + (16 / cameraZoom),
+        height: textPainter.height + (8 / cameraZoom),
+      );
+
+      final bgPaint = Paint()..color = const Color(0xFF1E1E1E).withOpacity(0.95)..style = PaintingStyle.fill;
+      final borderPaint = Paint()..color = Colors.cyanAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 1 / cameraZoom;
+
+      // Drop shadow for that enterprise depth
+      canvas.drawRRect(RRect.fromRectAndRadius(bgRect.translate(0, 2/cameraZoom), Radius.circular(4 / cameraZoom)), Paint()..color = Colors.black45..maskFilter=MaskFilter.blur(BlurStyle.normal, 4/cameraZoom));
+      
+      canvas.drawRRect(RRect.fromRectAndRadius(bgRect, Radius.circular(4 / cameraZoom)), bgPaint);
+      canvas.drawRRect(RRect.fromRectAndRadius(bgRect, Radius.circular(4 / cameraZoom)), borderPaint);
+
+      textPainter.paint(canvas, bgRect.topLeft + Offset(8 / cameraZoom, 4 / cameraZoom));
+    } catch (e) {
+      print('DEBUG ERROR: _drawTooltip failed: $e');
+    }
+  }
+
+  void _drawEnterpriseHUD(Canvas canvas, List<CanvasItem> selectedItems) {
+    if (selectedItems.isEmpty) return;
+
+    final bounds = BoundingBoxUtils.getCombinedRect(selectedItems);
+    if (bounds == Rect.zero) return;
+    
+    // Scale HUD
+    if (currentScaleX != null && currentScaleY != null && hoverPos != null) {
+      try {
+        String text;
+        bool isCtrl = HardwareKeyboard.instance.isControlPressed;
+        double scaleXPct = currentScaleX!.abs() * 100;
+        double scaleYPct = currentScaleY!.abs() * 100;
+
+        // Proportional scale checking
+        if ((currentScaleX! - currentScaleY!).abs() < 0.001) {
+            text = isCtrl 
+                ? 'Scale: ${scaleXPct.toStringAsFixed(1)}%' 
+                : 'Scale: ${scaleXPct.round()}%';
+        } else {
+            text = isCtrl 
+                ? 'W: ${scaleXPct.toStringAsFixed(1)}%  H: ${scaleYPct.toStringAsFixed(1)}%'
+                : 'W: ${scaleXPct.round()}%  H: ${scaleYPct.round()}%';
+        }
+        _drawTooltip(canvas, hoverPos!, text);
+      } catch (e) {
+        print('DEBUG ERROR: Scale HUD failed: $e');
+      }
+    }
+
+    // Rotation Dial HUD
+    if (activeHandle == HandleType.rotate) {
+      try {
+        final center = bounds.center;
+        
+        // Calculate invariant maximum radius based on transformed vertices
+        double maxRadius = 0.0;
+        try {
+          for (var item in selectedItems) {
+            final localRect = _getItemLocalRect(item);
+            if (localRect != Rect.zero) {
+              final tl = MatrixUtils.transformPoint(item.transform, localRect.topLeft);
+              final tr = MatrixUtils.transformPoint(item.transform, localRect.topRight);
+              final bl = MatrixUtils.transformPoint(item.transform, localRect.bottomLeft);
+              final br = MatrixUtils.transformPoint(item.transform, localRect.bottomRight);
+              maxRadius = math.max(maxRadius, (tl - center).distance);
+              maxRadius = math.max(maxRadius, (tr - center).distance);
+              maxRadius = math.max(maxRadius, (bl - center).distance);
+              maxRadius = math.max(maxRadius, (br - center).distance);
+            } else if (item is PathItem) {
+              for (var node in item.nodes) {
+                final p = MatrixUtils.transformPoint(item.transform, node.position);
+                maxRadius = math.max(maxRadius, (p - center).distance);
+              }
+            }
+          }
+        } catch (e) {
+          print('DEBUG ERROR: Calculating max radius failed: $e');
+        }
+        
+        // Fallback to bounding box if calculation fails or is zero
+        if (maxRadius == 0) {
+          maxRadius = math.max(bounds.width, bounds.height) / 2;
+        }
+
+        // Make the ring strictly tied to the object's corners to prevent "breathing"
+        final radius = maxRadius + (40.0 / cameraZoom);
+
+        // Outer faint track
+        final ringPaint = Paint()..color = Colors.white.withOpacity(0.05)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
+        canvas.drawCircle(center, radius, ringPaint);
+
+        bool isCtrl = HardwareKeyboard.instance.isControlPressed;
+        
+        // Draw 15 degree tick marks if snap is enabled (No Ctrl)
+        if (!isCtrl) {
+          final tickPaint = Paint()..color = Colors.white.withOpacity(0.3)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
+          final majorTickPaint = Paint()..color = Colors.cyanAccent.withOpacity(0.5)..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom;
+
+          for (int i = 0; i < 24; i++) {
+              double angle = i * (math.pi / 12);
+              bool isMajor = i % 6 == 0; // Highlight 90-degree axes
+              double tickLen = isMajor ? 8.0 : 4.0;
+              Offset inner = center + Offset(math.cos(angle) * (radius - tickLen/cameraZoom), math.sin(angle) * (radius - tickLen/cameraZoom));
+              Offset outer = center + Offset(math.cos(angle) * (radius + tickLen/cameraZoom), math.sin(angle) * (radius + tickLen/cameraZoom));
+              canvas.drawLine(inner, outer, isMajor ? majorTickPaint : tickPaint);
+          }
+        }
+
+        // Draw the active indicator needle
+        if (hoverPos != null) {
+          Offset currentVec = hoverPos! - center;
+          double currentAngle = math.atan2(currentVec.dy, currentVec.dx);
+          
+          if (!isCtrl) {
+              double snapAngle = math.pi / 12;
+              currentAngle = (currentAngle / snapAngle).round() * snapAngle;
+          }
+
+          Offset pointerOnRing = center + Offset(math.cos(currentAngle) * radius, math.sin(currentAngle) * radius);
+          
+          // Connect center to the ring
+          final needlePaint = Paint()..color = Colors.cyanAccent..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom;
+          canvas.drawLine(center, pointerOnRing, needlePaint);
+          
+          // Highlight pip on the ring
+          canvas.drawCircle(pointerOnRing, 3.0 / cameraZoom, Paint()..color=Colors.cyanAccent);
+
+          if (currentRotationAngle != null) {
+              double degrees = currentRotationAngle! * 180 / math.pi;
+              String text = isCtrl 
+                  ? 'Δ ${degrees.toStringAsFixed(1)}°' 
+                  : 'Δ ${degrees.round()}°';
+              _drawTooltip(canvas, pointerOnRing, text);
+          }
+        }
+      } catch (e) {
+        print('DEBUG ERROR: Rotation Dial HUD failed: $e');
+      }
     }
   }
 
