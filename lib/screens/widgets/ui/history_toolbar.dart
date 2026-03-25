@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/history_toolbar.dart
+// File: lib/screens/widgets/ui/history_toolbar.dart
 // Description: Undo and Redo buttons with shortcut hint tooltips.
 
 import 'package:flutter/material.dart';

@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/logic_group_widget.dart
+// File: lib/screens/widgets/ui/logic_group_widget.dart
 // Description: A UI wrapper that represents a conditional code block (like an IF statement).
 
 import 'package:flutter/material.dart';

@@ -1,9 +1,8 @@
-// File: lib/widgets/ui/editor_keyboard_wrapper.dart
+// File: lib/screens/widgets/ui/editor_keyboard_wrapper.dart
 // Description: A focus-trapping wrapper that feeds keyboard events to the HotkeyService.
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import '../../services/hotkey_service.dart';
+import '../../../services/hotkey_service.dart';
 
 class EditorKeyboardWrapper extends StatelessWidget {
   final Widget child;

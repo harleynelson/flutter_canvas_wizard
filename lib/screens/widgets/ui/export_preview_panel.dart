@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/export_preview_panel.dart
+// File: lib/screens/widgets/ui/export_preview_panel.dart
 // Description: A code previewer with syntax highlighting for generated Dart code.
 
 import 'package:flutter/material.dart';

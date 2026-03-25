@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/taper_preview_widget.dart
+// File: lib/screens/widgets/ui/taper_preview_widget.dart
 // Description: A small UI widget to visualize the thickness profile of a path.
 
 import 'package:flutter/material.dart';

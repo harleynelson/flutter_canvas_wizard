@@ -1,10 +1,10 @@
-// File: lib/widgets/ui/library_card.dart
+// File: lib/screens/widgets/ui/library_card.dart
 // Description: A visual tile for the asset library drawer.
 
 import 'package:flutter/material.dart';
 
-import '../../models/library/library_item.dart';
-import '../editor_canvas.dart';
+import '../../../models/library/library_item.dart';
+import '../canvas_renderer.dart';
 
 class LibraryCard extends StatelessWidget {
   final LibraryItem item;
@@ -27,7 +27,7 @@ class LibraryCard extends StatelessWidget {
                 child: CustomPaint(
                   painter: EditorCanvasPainter(
                     items: item.components,
-                    selectedItemId: null,
+                    selectedItemIds: const {}, // FIXED: Changed to empty Set
                   ),
                 ),
               ),

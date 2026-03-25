@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/canvas_tool_button.dart
+// File: lib/screens/widgets/ui/canvas_tool_button.dart
 // Description: A reusable, styled icon button for editor toolbars.
 
 import 'package:flutter/material.dart';

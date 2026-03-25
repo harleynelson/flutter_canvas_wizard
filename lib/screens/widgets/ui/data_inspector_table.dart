@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/data_inspector_table.dart
+// File: lib/screens/widgets/ui/data_inspector_table.dart
 // Description: A tabular view for precision editing of multiple coordinates.
 
 import 'package:flutter/material.dart';

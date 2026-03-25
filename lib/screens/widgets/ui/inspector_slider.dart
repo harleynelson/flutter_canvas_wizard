@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/inspector_slider.dart
+// File: lib/screens/widgets/ui/inspector_slider.dart
 // Description: A compact, dark-themed slider for property manipulation.
 
 import 'package:flutter/material.dart';

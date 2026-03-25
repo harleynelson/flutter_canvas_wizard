@@ -1,10 +1,10 @@
-// File: lib/widgets/ui/asset_previewer.dart
+// File: lib/screens/widgets/ui/asset_previewer.dart
 // Description: A specialized widget to preview the asset at different scales.
 
 import 'package:flutter/material.dart';
-import '../../models/canvas_item.dart';
-import '../../models/editor/preview_context.dart';
-import '../editor_canvas.dart';
+import '../../../models/canvas_item.dart';
+import '../../../models/editor/preview_context.dart';
+import '../canvas_renderer.dart';
 
 class AssetPreviewer extends StatelessWidget {
   final List<CanvasItem> items;
@@ -33,7 +33,7 @@ class AssetPreviewer extends StatelessWidget {
             child: CustomPaint(
               painter: EditorCanvasPainter(
                 items: items, // Future: pass scale/strokeMultiplier to painter
-                selectedItemId: null,
+                selectedItemIds: const {}, // FIXED: Changed to empty Set
               ),
             ),
           ),

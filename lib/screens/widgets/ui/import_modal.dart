@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/import_modal.dart
+// File: lib/screens/widgets/ui/import_modal.dart
 // Description: A code-entry dialog for importing existing Dart canvas logic.
 
 import 'package:flutter/material.dart';

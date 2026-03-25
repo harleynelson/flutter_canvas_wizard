@@ -1,4 +1,4 @@
-// File: lib/widgets/color_picker_dialog.dart
+// File: lib/screens/widgets/color_picker_dialog.dart
 // Description: An enterprise-grade custom dark-themed color picker featuring a unified, responsive interface with compact 2D visual selection, sliders/hex input, and custom saved swatches.
 
 import 'dart:convert';

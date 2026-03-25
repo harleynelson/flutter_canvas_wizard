@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/layer_item_widget.dart
+// File: lib/screens/widgets/ui/layer_item_widget.dart
 // Description: Reusable list item for the hierarchy panel.
 
 import 'package:flutter/material.dart';

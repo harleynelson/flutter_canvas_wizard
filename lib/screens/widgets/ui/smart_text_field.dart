@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/smart_text_field.dart
+// File: lib/screens/widgets/ui/smart_text_field.dart
 // Description: An enterprise-ready input field that handles focus and explicit commit logic.
 
 import 'package:flutter/material.dart';

@@ -1,8 +1,8 @@
-// File: lib/widgets/ui/conflict_resolver_dialog.dart
+// File: lib/screens/widgets/ui/conflict_resolver_dialog.dart
 // Description: A step-through UI for resolving unknown code variables.
 
 import 'package:flutter/material.dart';
-import '../../models/import/unresolved_symbol.dart';
+import '../../../models/import/unresolved_symbol.dart';
 
 class ConflictResolverDialog extends StatefulWidget {
   final List<UnresolvedSymbol> conflicts;

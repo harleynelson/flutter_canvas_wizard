@@ -10,11 +10,11 @@ import '../state/commands/workspace_commands.dart';
 import '../models/canvas_item.dart';
 import '../utils/shape_generator.dart';
 import '../utils/expression_evaluator.dart';
-import '../widgets/inspector_panel.dart';
-import '../widgets/interactive_canvas.dart';
-import '../widgets/ui/export_dialog.dart';
-import '../widgets/ui/history_toolbar.dart';
-import '../widgets/ui/import_modal.dart';
+import 'widgets/inspector_panel.dart';
+import 'widgets/interactive_canvas.dart';
+import 'widgets/ui/export_dialog.dart';
+import 'widgets/ui/history_toolbar.dart';
+import 'widgets/ui/import_modal.dart';
 import '../services/import/import_scanner.dart';
 
 class _HierarchyNode extends ConsumerStatefulWidget {
@@ -33,7 +33,8 @@ class _HierarchyNodeState extends ConsumerState<_HierarchyNode> {
   @override
   Widget build(BuildContext context) {
     final workspace = ref.watch(workspaceProvider);
-    final isSelected = widget.item.id == workspace.selectedItemId;
+    // FIXED: Check if the set contains this item's ID
+    final isSelected = workspace.selectedItemIds.contains(widget.item.id);
     
     final isGhost = !ExpressionEvaluator.evaluate(widget.item.enabledIf, workspace.variables);
     final hasCondition = widget.item.enabledIf != null && widget.item.enabledIf!.trim().isNotEmpty;
@@ -57,7 +58,7 @@ class _HierarchyNodeState extends ConsumerState<_HierarchyNode> {
               children: [
                 Icon(
                   widget.item is LogicGroupItem ? Icons.folder : 
-                  (widget.item is TextItem ? Icons.text_fields : // ADDED TextItem Icon
+                  (widget.item is TextItem ? Icons.text_fields : 
                   (widget.item is RectItem ? Icons.check_box_outline_blank : 
                   (widget.item is RRectItem ? Icons.crop_square : 
                   (widget.item is OvalItem ? Icons.circle_outlined : Icons.gesture)))),
@@ -82,7 +83,6 @@ class _HierarchyNodeState extends ConsumerState<_HierarchyNode> {
                     child: Icon(Icons.timeline, size: 14, color: Colors.blueAccent),
                   ),
                 const SizedBox(width: 4),
-                // VISIBILITY TOGGLE BUTTON
                 IconButton(
                   icon: Icon(
                     widget.item.isVisible ? Icons.visibility : Icons.visibility_off,
@@ -107,7 +107,7 @@ class _HierarchyNodeState extends ConsumerState<_HierarchyNode> {
                       } else if (widget.item is PathItem) {
                         final i = widget.item as PathItem;
                         updatedItem = PathItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, nodes: i.nodes, isClosed: i.isClosed);
-                      } else if (widget.item is TextItem) { // ADDED TextItem Visibility Toggle Support
+                      } else if (widget.item is TextItem) { 
                         final i = widget.item as TextItem;
                         updatedItem = TextItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, text: i.text, position: i.position, fontSize: i.fontSize, isBold: i.isBold);
                       } else if (widget.item is LogicGroupItem) {
@@ -282,11 +282,11 @@ class EditorScreen extends ConsumerWidget {
             final isShift = HardwareKeyboard.instance.isShiftPressed;
 
             if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
-              final selectedId = workspace.selectedItemId;
-              if (selectedId != null) {
-                final item = ref.read(workspaceProvider.notifier).selectedItem;
-                final parentId = ref.read(workspaceProvider.notifier).getParentId(selectedId);
-                if (item != null) {
+              // FIXED: Handle multi-delete via loop
+              final selectedItems = ref.read(workspaceProvider.notifier).selectedItems;
+              if (selectedItems.isNotEmpty) {
+                for (var item in selectedItems) {
+                  final parentId = ref.read(workspaceProvider.notifier).getParentId(item.id);
                   ref.read(historyProvider.notifier).execute(RemoveCommand(item, parentId, ref.read(workspaceProvider.notifier)));
                 }
               }
@@ -485,7 +485,7 @@ class EditorScreen extends ConsumerWidget {
                                               nodes: [ PathNode(position: const Offset(-40, 0), controlPoint2: const Offset(-20, -40)), PathNode(position: const Offset(40, 0), controlPoint1: const Offset(20, 40)) ],
                                             );
                                             break;
-                                          case 'text': // ADDED Text instantiation
+                                          case 'text': 
                                             newItem = TextItem(id: 'text_$paintId', name: 'Text Block', text: 'Hello World', position: const Offset(-40, -10), fontSize: 24.0, paint: CanvasPaint(fillColor: Colors.white, strokeWidth: 0, strokeColor: Colors.transparent));
                                             break;
                                           case 'circle':
@@ -511,7 +511,7 @@ class EditorScreen extends ConsumerWidget {
                                       PopupMenuItem(value: 'rrect', child: ListTile(leading: Icon(Icons.crop_square), title: Text('Rounded Rect'))),
                                       PopupMenuItem(value: 'oval', child: ListTile(leading: Icon(Icons.circle_outlined), title: Text('Oval / Ellipse'))),
                                       PopupMenuItem(value: 'path', child: ListTile(leading: Icon(Icons.gesture), title: Text('Bezier Path'))),
-                                      PopupMenuItem(value: 'text', child: ListTile(leading: Icon(Icons.text_fields), title: Text('Text Block'))), // ADDED Text menu item
+                                      PopupMenuItem(value: 'text', child: ListTile(leading: Icon(Icons.text_fields), title: Text('Text Block'))), 
                                       PopupMenuDivider(),
                                       PopupMenuItem(value: 'circle', child: ListTile(leading: Icon(Icons.circle), title: Text('Vector Circle'))),
                                       PopupMenuItem(value: 'triangle', child: ListTile(leading: Icon(Icons.change_history), title: Text('Triangle'))),

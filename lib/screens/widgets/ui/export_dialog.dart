@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/export_dialog.dart
+// File: lib/screens/widgets/ui/export_dialog.dart
 // Description: A dialog allowing users to choose between Dart, PNG, and SVG exports, featuring a live auto-fit preview and native file pickers.
 
 import 'dart:io';
@@ -7,13 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 
-import '../../models/canvas_item.dart';
-import '../../models/export/vector_exporter.dart';
-import '../../models/export/code_template.dart';
-import '../../models/export/image_exporter.dart';
-import '../../models/export/svg_exporter.dart';
-import '../../utils/bounding_box_utils.dart';
-import '../editor_canvas.dart';
+import '../../../models/canvas_item.dart';
+import '../../../models/export/vector_exporter.dart';
+import '../../../models/export/code_template.dart';
+import '../../../models/export/image_exporter.dart';
+import '../../../models/export/svg_exporter.dart';
+import '../../../utils/bounding_box_utils.dart';
+import '../canvas_renderer.dart';
 import 'export_preview_panel.dart';
 
 enum DartExportType { simple, fullMethod }
@@ -35,11 +35,11 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
   String _generatedCode = "";
 
   // Visual Export State
-  final TextEditingController _widthController = TextEditingController(text: "800");
-  final TextEditingController _heightController = TextEditingController(text: "600");
-  final TextEditingController _paddingController = TextEditingController(text: "20");
+  final TextEditingController _widthController = TextEditingController(text: "512");
+  final TextEditingController _heightController = TextEditingController(text: "512");
+  final TextEditingController _paddingController = TextEditingController(text: "5");
   
-  bool _transparentBackground = false;
+  bool _transparentBackground = true;
   final Color _backgroundColor = const Color(0xFF1E1E1E);
   bool _autoFit = true;
 
@@ -108,8 +108,8 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
 
   Future<void> _exportFile(String extension) async {
     try {
-      final double width = double.tryParse(_widthController.text) ?? 800;
-      final double height = double.tryParse(_heightController.text) ?? 600;
+      final double width = double.tryParse(_widthController.text) ?? 512;
+      final double height = double.tryParse(_heightController.text) ?? 512;
       final Color? bg = _transparentBackground ? null : _backgroundColor;
       
       final transform = _calculateTransform(width, height);

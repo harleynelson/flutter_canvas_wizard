@@ -1,5 +1,5 @@
 // File: lib/state/workspace_provider.dart
-// Description: Riverpod immutable state management for the canvas editor workspace, with new advanced reparenting capabilities.
+// Description: Riverpod immutable state management for the canvas editor workspace, updated for multi-selection capabilities.
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/canvas_item.dart';
@@ -9,7 +9,7 @@ enum DropPosition { above, into, below }
 class WorkspaceState {
   final List<CanvasItem> items;
   final List<ExportParameter> parameters;
-  final String? selectedItemId;
+  final Set<String> selectedItemIds; // NEW: Multi-selection set
   
   // Enterprise Editor Settings
   final bool snapToGrid;
@@ -22,7 +22,7 @@ class WorkspaceState {
   WorkspaceState({
     this.items = const [],
     this.parameters = const [],
-    this.selectedItemId,
+    this.selectedItemIds = const {},
     this.snapToGrid = true,
     this.gridSnapSize = 10.0,
     this.isTransformMode = false,
@@ -32,7 +32,7 @@ class WorkspaceState {
   WorkspaceState copyWith({
     List<CanvasItem>? items,
     List<ExportParameter>? parameters,
-    String? selectedItemId,
+    Set<String>? selectedItemIds,
     bool clearSelection = false,
     bool? snapToGrid,
     double? gridSnapSize,
@@ -42,7 +42,7 @@ class WorkspaceState {
     return WorkspaceState(
       items: items ?? this.items,
       parameters: parameters ?? this.parameters,
-      selectedItemId: clearSelection ? null : (selectedItemId ?? this.selectedItemId),
+      selectedItemIds: clearSelection ? {} : (selectedItemIds ?? this.selectedItemIds),
       snapToGrid: snapToGrid ?? this.snapToGrid,
       gridSnapSize: gridSnapSize ?? this.gridSnapSize,
       isTransformMode: isTransformMode ?? this.isTransformMode,
@@ -57,8 +57,10 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     return WorkspaceState();
   }
 
+  // Helper to get the first selected item for legacy single-item commands
   CanvasItem? get selectedItem {
-    if (state.selectedItemId == null) return null;
+    if (state.selectedItemIds.isEmpty) return null;
+    final firstId = state.selectedItemIds.first;
     
     CanvasItem? findRecursive(List<CanvasItem> list, String id) {
       for (var item in list) {
@@ -71,7 +73,23 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
       return null;
     }
     
-    return findRecursive(state.items, state.selectedItemId!);
+    return findRecursive(state.items, firstId);
+  }
+
+  // Get all currently selected items
+  List<CanvasItem> get selectedItems {
+    if (state.selectedItemIds.isEmpty) return [];
+    List<CanvasItem> found = [];
+    
+    void findRecursive(List<CanvasItem> list) {
+      for (var item in list) {
+        if (state.selectedItemIds.contains(item.id)) found.add(item);
+        if (item is LogicGroupItem) findRecursive(item.children);
+      }
+    }
+    
+    findRecursive(state.items);
+    return found;
   }
 
   void addItem(CanvasItem item) {
@@ -82,12 +100,32 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     }
   }
 
-  void selectItem(String? id) {
+  // Updated to support multi-select toggling via shift-click
+  void selectItem(String? id, {bool multi = false}) {
     try {
-      state = state.copyWith(selectedItemId: id, clearSelection: id == null);
+      if (id == null) {
+        state = state.copyWith(clearSelection: true);
+        return;
+      }
+
+      if (multi) {
+        final newSelection = Set<String>.from(state.selectedItemIds);
+        if (newSelection.contains(id)) {
+          newSelection.remove(id);
+        } else {
+          newSelection.add(id);
+        }
+        state = state.copyWith(selectedItemIds: newSelection);
+      } else {
+        state = state.copyWith(selectedItemIds: {id});
+      }
     } catch (e) {
       print('DEBUG ERROR: WorkspaceNotifier.selectItem failed: $e');
     }
+  }
+  
+  void selectItems(Set<String> ids) {
+    state = state.copyWith(selectedItemIds: ids);
   }
 
   void updateItem(CanvasItem updatedItem) {
@@ -205,7 +243,6 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
     }
   }
 
-  // Kept for backward compatibility with simple append operations (like commands)
   void reparentItem(String itemId, String? targetGroupId) {
     try {
       CanvasItem? itemToMove;
@@ -300,10 +337,11 @@ class WorkspaceNotifier extends Notifier<WorkspaceState> {
       }
 
       final newItems = removeRecursive(state.items);
+      final newSelection = Set<String>.from(state.selectedItemIds)..remove(id);
+      
       state = state.copyWith(
         items: newItems,
-        selectedItemId: state.selectedItemId == id ? null : state.selectedItemId,
-        clearSelection: state.selectedItemId == id,
+        selectedItemIds: newSelection,
       );
     } catch (e) {
       print('DEBUG ERROR: WorkspaceNotifier.removeItem failed: $e');

@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/shortcut_hint.dart
+// File: lib/screens/widgets/ui/shortcut_hint.dart
 // Description: A small, styled visual representation of a keyboard key.
 
 import 'package:flutter/material.dart';

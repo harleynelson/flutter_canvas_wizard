@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../canvas_item.dart';
-import '../../widgets/editor_canvas.dart';
+import '../../screens/widgets/canvas_renderer.dart';
 
 class ImageExporter {
   static Future<Uint8List?> exportToPng({

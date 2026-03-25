@@ -1,15 +1,15 @@
-// File: lib/widgets/inspector_panel.dart
+// File: lib/screens/widgets/inspector_panel.dart
 // Description: Advanced property editor overhauled with Accordions, better terminology, and designer-friendly grouping. Now supports TextItem properties.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../state/workspace_provider.dart';
-import '../state/history/history_manager.dart';
-import '../state/commands/workspace_commands.dart';
-import '../models/canvas_item.dart';
-import '../utils/bounding_box_utils.dart';
-import '../utils/transform_utils.dart';
-import 'color_picker_dialog.dart';
+import '../../state/workspace_provider.dart';
+import '../../state/history/history_manager.dart';
+import '../../state/commands/workspace_commands.dart';
+import '../../models/canvas_item.dart';
+import '../../utils/bounding_box_utils.dart';
+import '../../utils/transform_utils.dart';
+import 'ui/color_picker_dialog.dart';
 import 'ui/inspector_slider.dart';
 import 'ui/property_accordion.dart';
 
@@ -54,7 +54,8 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
   @override
   Widget build(BuildContext context) {
     final workspace = ref.watch(workspaceProvider);
-    final selectedId = workspace.selectedItemId;
+    // FIXED: Safely grab the first selected item to edit
+    final selectedId = workspace.selectedItemIds.isNotEmpty ? workspace.selectedItemIds.first : null;
 
     if (selectedId == null) {
       return const Center(

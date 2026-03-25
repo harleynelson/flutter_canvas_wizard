@@ -1,4 +1,4 @@
-// File: lib/widgets/ui/property_accordion.dart
+// File: lib/screens/widgets/ui/property_accordion.dart
 // Description: A collapsible section for the Inspector panel to group properties.
 
 import 'package:flutter/material.dart';
