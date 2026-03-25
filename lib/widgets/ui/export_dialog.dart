@@ -5,7 +5,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:file_picker/file_picker.dart'; // REQUIRED DEPENDENCY
+import 'package:file_picker/file_picker.dart';
 
 import '../../models/canvas_item.dart';
 import '../../models/export/vector_exporter.dart';
@@ -97,6 +97,7 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
 
       if (zoom.isInfinite || zoom.isNaN) zoom = 1.0;
 
+      // Moves the center of the bounding box to the origin point
       Offset pan = -bounds.center * zoom;
       return (pan, zoom);
     } catch (e) {
@@ -117,13 +118,12 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
         dialogTitle: 'Save $extension Export',
         fileName: 'canvas_export$extension',
         type: FileType.custom,
-        allowedExtensions: [extension.replaceAll('.', '')], // e.g. 'png'
+        allowedExtensions: [extension.replaceAll('.', '')], // Strip dot for file_picker
       );
 
-      if (outputFile == null) {
-        return; // User canceled
-      }
+      if (outputFile == null) return; // User canceled the picker
 
+      // Ensure extension exists
       if (!outputFile.toLowerCase().endsWith(extension)) {
         outputFile += extension;
       }
@@ -278,6 +278,8 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
   Widget _buildVisualTab() {
     final double width = double.tryParse(_widthController.text) ?? 800;
     final double height = double.tryParse(_heightController.text) ?? 600;
+    
+    // Dynamically calculate camera placement to center object bounds
     final transform = _calculateTransform(width, height);
 
     return Row(
@@ -383,8 +385,7 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: ClipRect(
-                    // FittedBox ensures the preview scales visually inside the dialog 
-                    // without changing the actual layout logic of the EditorCanvasPainter
+                    // FittedBox scales the exact width/height sizing into the container UI nicely.
                     child: FittedBox(
                       fit: BoxFit.contain,
                       child: SizedBox(
@@ -392,12 +393,13 @@ class _ExportDialogState extends State<ExportDialog> with SingleTickerProviderSt
                         height: height,
                         child: Stack(
                           children: [
-                            // Checkerboard background for transparency visualization
                             if (_transparentBackground)
                               Positioned.fill(
                                 child: CustomPaint(painter: _CheckerboardPainter()),
                               ),
+                            // CRITICAL FIX: Explicit Size parameter stops it from collapsing to 0,0
                             CustomPaint(
+                              size: Size(width, height),
                               painter: EditorCanvasPainter(
                                 items: widget.items,
                                 isExportMode: true,
