@@ -1,8 +1,9 @@
 // File: lib/screens/widgets/inspector_panel.dart
-// Description: Advanced property editor overhauled with Accordions, better terminology, and designer-friendly grouping. Now supports TextItem properties.
+// Description: Advanced property editor overhauled with Accordions, better terminology, and designer-friendly grouping. Added Flip and Rotate Quick Actions.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'dart:math' as math;
 import '../../state/workspace_provider.dart';
 import '../../state/history/history_manager.dart';
 import '../../state/commands/workspace_commands.dart';
@@ -79,7 +80,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     return ListView(
       padding: const EdgeInsets.only(bottom: 24.0),
       children: [
-        // --- IDENTITY (Always visible) ---
         Padding(
           padding: const EdgeInsets.all(12.0),
           child: Column(
@@ -106,7 +106,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
           ),
         ),
 
-        // --- TRANSFORM & SHAPE DATA ---
         if (item is RectItem || item is RRectItem || item is OvalItem || item is PathItem || item is TextItem)
           PropertyAccordion(
             title: item is PathItem ? 'Transform & Path' : 'Transform & Data',
@@ -116,7 +115,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
             ],
           ),
 
-        // --- APPEARANCE & EXPORT VARIABLES ---
         if (item is! LogicGroupItem)
           PropertyAccordion(
             title: 'Appearance',
@@ -126,7 +124,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
             ],
           ),
 
-        // --- 3D EXTRUSION ---
         if (item is! LogicGroupItem && item is! TextItem)
           PropertyAccordion(
             title: '3D Extrusion',
@@ -136,7 +133,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
             ],
           ),
 
-        // --- LOGIC & TIMELINE ---
         PropertyAccordion(
           title: 'Timeline Visibility',
           initiallyExpanded: item.enabledIf != null,
@@ -145,7 +141,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
           ],
         ),
 
-        // --- QUICK ACTIONS ---
         PropertyAccordion(
           title: 'Actions',
           initiallyExpanded: true,
@@ -178,7 +173,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
-  // FIXED: Replaces isolated _buildRectFields, etc. with a unified global edit utilizing TransformUtils and BoundingBoxUtils
   Widget _buildUnifiedTransformFields(CanvasItem item) {
     try {
       final bounds = BoundingBoxUtils.getCombinedRect([item]);
@@ -206,7 +200,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
           
           const Divider(color: Colors.white12, height: 24),
 
-          // Shape-specific properties
           if (item is RRectItem) ... [
             InspectorSlider(
               label: 'Corner Radius',
@@ -401,17 +394,51 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            _scaleButton(item, '0.5x', 0.5),
-            _scaleButton(item, '0.9x', 0.9),
-            _scaleButton(item, '1.1x', 1.1),
-            _scaleButton(item, '2.0x', 2.0),
+            _actionButton(item, '0.5x', Icons.zoom_out_map, () => _handleScale(item, 0.5)),
+            _actionButton(item, '0.9x', Icons.zoom_out_map, () => _handleScale(item, 0.9)),
+            _actionButton(item, '1.1x', Icons.zoom_out_map, () => _handleScale(item, 1.1)),
+            _actionButton(item, '2.0x', Icons.zoom_out_map, () => _handleScale(item, 2.0)),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Text('Rotate & Flip', style: TextStyle(color: Colors.white54, fontSize: 11)),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            _actionButton(item, 'Flip X', Icons.flip, () {
+               final bounds = BoundingBoxUtils.getCombinedRect([item]);
+               final flipped = TransformUtils.flipItem(item, true, false, bounds.center);
+               _updateItem(flipped, item);
+            }),
+            _actionButton(item, 'Flip Y', Icons.flip, () {
+               final bounds = BoundingBoxUtils.getCombinedRect([item]);
+               final flipped = TransformUtils.flipItem(item, false, true, bounds.center);
+               _updateItem(flipped, item);
+            }),
+            _actionButton(item, 'Rot 90°', Icons.rotate_right, () {
+               final bounds = BoundingBoxUtils.getCombinedRect([item]);
+               final rotated = TransformUtils.rotateItem(item, math.pi / 2, bounds.center);
+               _updateItem(rotated, item);
+            }),
           ],
         ),
       ],
     );
   }
 
-  Widget _scaleButton(CanvasItem item, String label, double factor) {
+  void _handleScale(CanvasItem item, double factor) {
+    try {
+      final bounds = BoundingBoxUtils.getCombinedRect([item]);
+      final origin = bounds != Rect.zero ? bounds.center : Offset.zero;
+      final scaledItem = TransformUtils.scaleItem(item, factor, origin);
+      _updateItem(scaledItem, item);
+    } catch (e) {
+      print('DEBUG ERROR: Quick scale failed: $e');
+    }
+  }
+
+  Widget _actionButton(CanvasItem item, String label, IconData icon, VoidCallback onTap) {
     return Expanded(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 2.0),
@@ -426,17 +453,14 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
               side: const BorderSide(color: Colors.blueAccent, width: 0.5),
             ),
           ),
-          onPressed: () {
-            try {
-              final bounds = BoundingBoxUtils.getCombinedRect([item]);
-              final origin = bounds != Rect.zero ? bounds.center : Offset.zero;
-              final scaledItem = TransformUtils.scaleItem(item, factor, origin);
-              _updateItem(scaledItem, item);
-            } catch (e) {
-              print('DEBUG ERROR: Quick scale failed: $e');
-            }
-          },
-          child: Text(label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+          onPressed: onTap,
+          child: Column(
+            children: [
+               Icon(icon, size: 14),
+               const SizedBox(height: 4),
+               Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+            ]
+          ),
         ),
       ),
     );
@@ -531,7 +555,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
         
         const Divider(color: Colors.white12, height: 24),
         
-        // Code Export Variables
         const Text('Code Export Variables', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 11)),
         const SizedBox(height: 4),
         const Text('Override hex colors with Dart variables when exporting.', style: TextStyle(color: Colors.white38, fontSize: 10)),
@@ -554,7 +577,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
-  // FIXED: Preserving inherited bounds like visibility and transforms
   void _applyPaint(CanvasItem item, CanvasPaint newPaint) {
     if (item is RectItem) {
       _updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect), item);

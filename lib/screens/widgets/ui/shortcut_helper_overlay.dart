@@ -1,5 +1,5 @@
 // File: lib/screens/widgets/ui/shortcut_helper_overlay.dart
-// Description: Reusable visual helper to display contextual keyboard shortcuts to the user based on selection state.
+// Description: Reusable visual helper to display contextual keyboard shortcuts to the user based on selection state. Added Stroke scale shortcut logic.
 
 import 'package:flutter/material.dart';
 import 'shortcut_hint.dart';
@@ -42,13 +42,25 @@ class ShortcutHelperOverlay extends StatelessWidget {
               spacing: 16,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                if (isTransformMode) ...[
+                if (isTransformMode || selectedCount == 1) ...[
                   const Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       ShortcutHint(text: 'Shift'),
                       SizedBox(width: 8),
                       Text('Scale proportionally', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    ],
+                  ),
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ShortcutHint(text: 'Shift'),
+                      SizedBox(width: 4),
+                      Text('+', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                      SizedBox(width: 4),
+                      ShortcutHint(text: 'Ctrl'),
+                      SizedBox(width: 8),
+                      Text('Scale stroke', style: TextStyle(color: Colors.white70, fontSize: 12)),
                     ],
                   ),
                 ],

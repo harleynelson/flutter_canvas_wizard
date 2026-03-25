@@ -1,5 +1,5 @@
 // File: lib/screens/widgets/interactive_canvas.dart
-// Description: Handles gesture detection, hierarchical matrix-aware hit-testing, marquee selection, and dynamic shape transformations using local/global space conversions.
+// Description: Handles gesture detection, hierarchical matrix-aware hit-testing, marquee selection, and dynamic shape transformations. Added Rotate handling and Shift+Ctrl Stroke Scaling logic.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -19,7 +19,7 @@ import 'canvas_renderer.dart';
 import 'ui/shortcut_helper_overlay.dart';
 
 enum HandleType { 
-  none, move, 
+  none, move, rotate, 
   topLeft, topEdge, topRight, rightEdge, bottomRight, bottomEdge, bottomLeft, leftEdge,
   pathNode, pathControl1, pathControl2, pathEdge 
 }
@@ -92,7 +92,16 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
     return null;
   }
 
-  // Used for global aligned bounding boxes (Transform mode or raw unrotated rects)
+  CanvasItem _copyWithPaint(CanvasItem item, CanvasPaint newPaint) {
+    if (item is RectItem) return RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect);
+    if (item is RRectItem) return RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect, radius: item.radius);
+    if (item is OvalItem) return OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect);
+    if (item is PathItem) return PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed);
+    if (item is TextItem) return TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold);
+    if (item is LogicGroupItem) return LogicGroupItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, condition: item.condition, children: item.children);
+    return item;
+  }
+
   HandleType _getRectHandleHit(Rect rect, Offset pos) {
     try {
       final scaledTolerance = _hitTolerance / _cameraZoom;
@@ -117,7 +126,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
     return HandleType.none;
   }
 
-  // NEW: Calculates hit-tests on the actual transformed (rotated) corners of an item's bounds
   HandleType _getTransformedRectHandleHit(CanvasItem item, Rect localRect, Offset globalPos) {
     final scaledTolerance = _hitTolerance / _cameraZoom;
     
@@ -153,7 +161,7 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
     if (item is RRectItem) return item.rect;
     if (item is OvalItem) return item.rect;
     if (item is TextItem) return Rect.fromLTWH(item.position.dx, item.position.dy, item.text.length * (item.fontSize * 0.6), item.fontSize * 1.2);
-    if (item is LogicGroupItem) return BoundingBoxUtils.getCombinedRect(item.children); // Group local rect is combined children rect
+    if (item is LogicGroupItem) return BoundingBoxUtils.getCombinedRect(item.children); 
     return Rect.zero;
   }
 
@@ -169,7 +177,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
     try {
       final scaledTolerance = _hitTolerance / _cameraZoom;
 
-      // Transform Mode: Combined Bounding Box Hit Test (Always aligned globally)
       if (workspace.isTransformMode && workspace.selectedItemIds.isNotEmpty) {
         List<CanvasItem> selectedItems = [];
         void findSelected(List<CanvasItem> items) {
@@ -183,6 +190,12 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
         if (selectedItems.isNotEmpty) {
           final boundingBox = BoundingBoxUtils.getCombinedRect(selectedItems);
           if (boundingBox != Rect.zero) {
+            final moveHandlePos = Offset(boundingBox.center.dx, boundingBox.top - (30.0 / _cameraZoom));
+            final rotateHandlePos = Offset(boundingBox.center.dx, boundingBox.top - (60.0 / _cameraZoom));
+
+            if ((logicalPos - rotateHandlePos).distance <= (12.0 / _cameraZoom)) return HitResult(itemId: selectedItems.first.id, handle: HandleType.rotate);
+            if ((logicalPos - moveHandlePos).distance <= (12.0 / _cameraZoom)) return HitResult(itemId: selectedItems.first.id, handle: HandleType.move);
+
             final handle = _getRectHandleHit(boundingBox.inflate(4.0 / _cameraZoom), logicalPos);
             if (handle != HandleType.none) {
                return HitResult(itemId: selectedItems.first.id, handle: handle);
@@ -191,23 +204,19 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
         }
       }
 
-      // Normal Mode: Individual Item Hit Test
       if (!workspace.isTransformMode && workspace.selectedItemIds.isNotEmpty) {
         if (workspace.selectedItemIds.length == 1) {
           final selectedItem = _findItemRecursive(workspace.items, workspace.selectedItemIds.first);
           if (selectedItem != null && selectedItem.isVisible && !_isItemGhosted(selectedItem, workspace)) {
             
-            // Dedicated "Move" Handle Hit Test (Above top boundary)
             final bounds = BoundingBoxUtils.getCombinedRect([selectedItem]);
             if (bounds != Rect.zero) {
-               // Float the handle 30 logical pixels above the top edge
                final moveHandlePos = Offset(bounds.center.dx, bounds.top - (30.0 / _cameraZoom));
-               if ((logicalPos - moveHandlePos).distance <= (12.0 / _cameraZoom)) {
-                  return HitResult(itemId: selectedItem.id, handle: HandleType.move);
-               }
+               final rotateHandlePos = Offset(bounds.center.dx, bounds.top - (60.0 / _cameraZoom));
+               if ((logicalPos - rotateHandlePos).distance <= (12.0 / _cameraZoom)) return HitResult(itemId: selectedItem.id, handle: HandleType.rotate);
+               if ((logicalPos - moveHandlePos).distance <= (12.0 / _cameraZoom)) return HitResult(itemId: selectedItem.id, handle: HandleType.move);
             }
 
-            // Handles testing for Rect/Oval/Text/Groups
             if (selectedItem is RectItem || selectedItem is RRectItem || selectedItem is OvalItem || selectedItem is TextItem || selectedItem is LogicGroupItem) {
               final localRect = _getItemLocalRect(selectedItem);
               if (localRect != Rect.zero) {
@@ -215,11 +224,9 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                 if (handle != HandleType.none) return HitResult(itemId: selectedItem.id, handle: handle);
               }
             } 
-            // Handles testing for Paths
             else if (selectedItem is PathItem) {
               for (int i = 0; i < selectedItem.nodes.length; i++) {
                 final node = selectedItem.nodes[i];
-                // Transform node to global space for hit testing
                 Offset gPos = MatrixUtils.transformPoint(selectedItem.transform, node.position);
                 
                 if (node.controlPoint1 != null) {
@@ -233,7 +240,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                 if ((logicalPos - gPos).distance <= scaledTolerance) return HitResult(itemId: selectedItem.id, handle: HandleType.pathNode, nodeIndex: i);
               }
               
-              // Edge hitting (requires transforming all nodes to global temporary list)
               final globalNodes = selectedItem.nodes.map((n) => PathNode(
                 position: MatrixUtils.transformPoint(selectedItem.transform, n.position),
                 controlPoint1: n.controlPoint1 != null ? MatrixUtils.transformPoint(selectedItem.transform, n.controlPoint1!) : null,
@@ -247,7 +253,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
         }
       }
 
-      // Base Canvas Hit Test (Inverse Matrix testing against body)
       HitResult hitTestRecursive(List<CanvasItem> items, Offset globalPos) {
         for (int i = items.length - 1; i >= 0; i--) {
           final item = items[i];
@@ -256,7 +261,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
               final childHit = hitTestRecursive(item.children, globalPos);
               if (childHit.itemId != null) return childHit;
             } else {
-              // INVERSE MATRIX: Transform screen mouse backwards into the shape's local space
               final inverse = Matrix4.tryInvert(item.transform) ?? Matrix4.identity();
               final localPos = MatrixUtils.transformPoint(inverse, globalPos);
               final tol = scaledTolerance; 
@@ -275,7 +279,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                    else if (item is OvalItem) path.addOval(rect.inflate(effectiveTol));
                    hit = path.contains(localPos);
                 } else {
-                   // Create a hollow hit-test bounds for transparent shapes so we click through the middle
                    final outerPath = Path();
                    if (item is RectItem) outerPath.addRect(rect.inflate(effectiveTol));
                    else if (item is RRectItem) outerPath.addRRect(RRect.fromRectAndRadius(rect.inflate(effectiveTol), Radius.circular(item.radius + effectiveTol)));
@@ -495,7 +498,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                       if (details.delta.distance > 0) _hasDragged = true;
                       final logicalPos = _getLogicalPosition(details.localPosition, canvasSize);
 
-                      // 1. Marquee Update
                       if (_marqueeStart != null) {
                         setState(() => _marqueeEnd = logicalPos);
                         final marqueeRect = Rect.fromPoints(_marqueeStart!, _marqueeEnd!);
@@ -518,8 +520,35 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                       final delta = logicalPos - _dragStartLocalPosition!;
                       final selectedItems = ref.read(workspaceProvider.notifier).selectedItems;
                       if (selectedItems.isEmpty) return;
+                      bool isShiftCtrl = HardwareKeyboard.instance.isShiftPressed && HardwareKeyboard.instance.isControlPressed;
 
-                      // 2. Multi-Item Transform & Translation
+                      // Rotate Execution
+                      if (_activeHandle == HandleType.rotate) {
+                        bool isCtrl = HardwareKeyboard.instance.isControlPressed;
+                        for (var item in selectedItems) {
+                           final original = _dragOriginalItemsState[item.id];
+                           if (original == null) continue;
+                           final combinedRect = _dragStartRects['__combined__'] ?? BoundingBoxUtils.getCombinedRect([original]);
+                           final center = combinedRect.center;
+                           final startVec = _dragStartLocalPosition! - center;
+                           final currentVec = logicalPos - center;
+                           
+                           double currentAngle = math.atan2(currentVec.dy, currentVec.dx);
+                           
+                           if (!isCtrl) {
+                              double snapAngle = math.pi / 12; // 15 degrees
+                              currentAngle = (currentAngle / snapAngle).round() * snapAngle;
+                           }
+
+                           final angleDelta = currentAngle - math.atan2(startVec.dy, startVec.dx);
+
+                           final rotatedItem = TransformUtils.rotateItem(original, angleDelta, center);
+                           ref.read(workspaceProvider.notifier).updateItem(rotatedItem);
+                        }
+                        return;
+                      }
+
+                      // Multi-Item Transform
                       if (workspace.isTransformMode) {
                          final combinedRect = _dragStartRects['__combined__'];
                          if (combinedRect == null) return;
@@ -592,13 +621,20 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                               else if (_activeHandle == HandleType.rightEdge) origin = Offset(combinedRect.left, combinedRect.center.dy);
 
                               final stretchedItem = TransformUtils.stretchItem(original, scaleX, scaleY, origin);
-                              ref.read(workspaceProvider.notifier).updateItem(stretchedItem);
+                              
+                              if (isShiftCtrl) {
+                                double maxScale = math.max(scaleX.abs(), scaleY.abs());
+                                final newStroke = original.paint.strokeWidth * maxScale;
+                                final newPaint = stretchedItem.paint.copyWith(strokeWidth: newStroke);
+                                ref.read(workspaceProvider.notifier).updateItem(_copyWithPaint(stretchedItem, newPaint));
+                              } else {
+                                ref.read(workspaceProvider.notifier).updateItem(stretchedItem);
+                              }
                            }
                          }
                          return;
                       }
 
-                      // 3. Multi-Item Move (Non-Transform Mode)
                       if (selectedItems.length > 1 && _activeHandle == HandleType.move) {
                          Offset finalDelta = delta;
                          if (workspace.snapToGrid) {
@@ -621,7 +657,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                          return;
                       }
 
-                      // 4. Single-Item Direct Shape Editing (Matrix-Aware Local Coordinate Editing)
                       if (selectedItems.length == 1) {
                          final item = selectedItems.first;
                          final itemRect = _dragStartRects[item.id];
@@ -629,13 +664,10 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                          
                          Offset globalTarget = _dragStartLocalPosition! + delta;
                          
-                         // Removed mouse-offset snapping. It's now calculated on the actual shape edges below.
-                         
                          Offset localStart = MatrixUtils.transformPoint(inverse, _dragStartLocalPosition!);
                          Offset localTarget = MatrixUtils.transformPoint(inverse, globalTarget);
                          Offset localDelta = localTarget - localStart;
 
-                         // Move mode applies to all single items simply
                          if (_activeHandle == HandleType.move) {
                             Offset finalDelta = delta;
                             if (workspace.snapToGrid) {
@@ -669,7 +701,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                                default: break;
                              }
 
-                             // FIX: Snap the physical edge boundaries instead of dragging offsets.
                              if (workspace.snapToGrid) {
                                  if (_activeHandle.name.toLowerCase().contains('left')) left = _snap(left, workspace.gridSnapSize);
                                  if (_activeHandle.name.toLowerCase().contains('top')) top = _snap(top, workspace.gridSnapSize);
@@ -681,10 +712,19 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                                left < right ? left : right, top < bottom ? top : bottom,
                                left < right ? right : left, top < bottom ? bottom : top,
                              );
+
+                             CanvasPaint currentPaint = item.paint;
+                             if (isShiftCtrl && _activeHandle != HandleType.move) {
+                                double origWidth = itemRect.width == 0 ? 1 : itemRect.width;
+                                double changedWidth = (right - left).abs();
+                                double scale = changedWidth / origWidth;
+                                final newStroke = _dragOriginalItemsState[item.id]!.paint.strokeWidth * scale;
+                                currentPaint = item.paint.copyWith(strokeWidth: newStroke);
+                             }
                              
-                             if (item is RectItem) ref.read(workspaceProvider.notifier).updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: newRect));
-                             else if (item is RRectItem) ref.read(workspaceProvider.notifier).updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: newRect, radius: item.radius));
-                             else if (item is OvalItem) ref.read(workspaceProvider.notifier).updateItem(OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: newRect));
+                             if (item is RectItem) ref.read(workspaceProvider.notifier).updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: currentPaint, transform: item.transform, rect: newRect));
+                             else if (item is RRectItem) ref.read(workspaceProvider.notifier).updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: currentPaint, transform: item.transform, rect: newRect, radius: item.radius));
+                             else if (item is OvalItem) ref.read(workspaceProvider.notifier).updateItem(OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: currentPaint, transform: item.transform, rect: newRect));
                          }
                          else if (item is PathItem && _dragStartNodes != null && _draggingNodeIndex != null) {
                             List<PathNode> newNodes = _dragStartNodes!.map((n) => PathNode(position: n.position, controlPoint1: n.controlPoint1, controlPoint2: n.controlPoint2)).toList();
@@ -705,7 +745,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                             else if (_activeHandle == HandleType.pathNode) {
                               var newPos = _dragStartNodes![i].position + localDelta;
                               
-                              // FIX: Snap the direct position of the node
                               if (workspace.snapToGrid) {
                                   newPos = Offset(_snap(newPos.dx, workspace.gridSnapSize), _snap(newPos.dy, workspace.gridSnapSize));
                               }
@@ -825,6 +864,7 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                       selectedItemIds: workspace.selectedItemIds,
                       hoveredItemId: _hoveredItemId,
                       hoveredHandle: _hoveredHandle,
+                      activeHandle: _activeHandle,
                       hoverPos: _hoverPos,
                       hoveredNodeIndex: _hoveredNodeIndex,
                       gridSnapSize: workspace.gridSnapSize,

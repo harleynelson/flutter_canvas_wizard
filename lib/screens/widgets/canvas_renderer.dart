@@ -1,19 +1,22 @@
 // File: lib/screens/widgets/canvas_renderer.dart
-// Description: Renders the models applying their Matrix4 transformations, and overlays rotated interactive highlighting elements.
+// Description: Renders the models applying their Matrix4 transformations, and overlays rotated interactive highlighting elements. Now separates Fill/Stroke to maintain unscaled stroke widths.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'dart:math' as math;
 import '../../models/canvas_item.dart';
 import '../../models/geometry/bezier_path_data.dart';
 import '../../utils/bounding_box_utils.dart'; 
 import '../../utils/expression_evaluator.dart';
 import 'interactive_canvas.dart'; 
-import '../../utils/path_math.dart'; // Added for PathMath.getBoundingBox
+import '../../utils/path_math.dart'; 
 
 class EditorCanvasPainter extends CustomPainter {
   final List<CanvasItem> items;
   final Set<String> selectedItemIds;
   final String? hoveredItemId;
   final HandleType hoveredHandle;
+  final HandleType activeHandle;
   final Offset? hoverPos;
   final int? hoveredNodeIndex; 
   final double gridSnapSize;
@@ -31,6 +34,7 @@ class EditorCanvasPainter extends CustomPainter {
     this.selectedItemIds = const {},
     this.hoveredItemId,
     this.hoveredHandle = HandleType.none,
+    this.activeHandle = HandleType.none,
     this.hoverPos,
     this.hoveredNodeIndex,
     this.gridSnapSize = 10.0,
@@ -55,7 +59,6 @@ class EditorCanvasPainter extends CustomPainter {
         _drawOriginAxis(canvas, size);
       }
 
-      // Draw all items recursively using matrix injection
       for (var item in items) {
         _renderItem(canvas, item, inheritedGhost: false);
       }
@@ -83,6 +86,29 @@ class EditorCanvasPainter extends CustomPainter {
           canvas.drawRect(marqueeRect!, paintFill);
           canvas.drawRect(marqueeRect!, paintStroke);
         }
+
+        // --- NEW: Draw Rotation Snap Lines ---
+        if (activeHandle == HandleType.rotate && selectedItemIds.isNotEmpty) {
+           bool isCtrl = HardwareKeyboard.instance.isControlPressed;
+           if (!isCtrl) {
+              final selectedItems = _findItemsRecursive(items, selectedItemIds);
+              final bounds = BoundingBoxUtils.getCombinedRect(selectedItems);
+              if (bounds != Rect.zero) {
+                  final center = bounds.center;
+                  final radius = math.max(bounds.width, bounds.height) + (100.0 / cameraZoom);
+                  
+                  final snapPaint = Paint()..color = Colors.white.withOpacity(0.15)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
+                  final boldSnapPaint = Paint()..color = Colors.cyanAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
+
+                  for (int i = 0; i < 24; i++) {
+                      double angle = i * (math.pi / 12);
+                      Offset endPoint = center + Offset(math.cos(angle) * radius, math.sin(angle) * radius);
+                      // Make major axes slightly more visible
+                      canvas.drawLine(center, endPoint, i % 6 == 0 ? boldSnapPaint : snapPaint);
+                  }
+              }
+           }
+        }
       }
       
       canvas.restore();
@@ -95,25 +121,24 @@ class EditorCanvasPainter extends CustomPainter {
     if (!item.isVisible) return;
     bool isGhost = inheritedGhost || !ExpressionEvaluator.evaluate(item.enabledIf, variables);
 
-    canvas.save();
-    
-    // THE MAGIC: We apply the item's specific affine transformation matrix
-    canvas.transform(item.transform.storage);
-
     try {
+      if (item is LogicGroupItem) {
+        canvas.save();
+        canvas.transform(item.transform.storage);
+        for (var child in item.children) _renderItem(canvas, child, inheritedGhost: isGhost);
+        canvas.restore();
+        return;
+      }
+
       if (item is RectItem) _drawRectItem(canvas, item, isGhost);
       else if (item is RRectItem) _drawRRectItem(canvas, item, isGhost);
       else if (item is OvalItem) _drawOvalItem(canvas, item, isGhost);
       else if (item is PathItem) _drawPathItem(canvas, item, isGhost);
       else if (item is TextItem) _drawTextItem(canvas, item, isGhost);
-      else if (item is LogicGroupItem) {
-        for (var child in item.children) _renderItem(canvas, child, inheritedGhost: isGhost);
-      }
+
     } catch (e) {
       print('DEBUG ERROR: _renderItem failed for ${item.id}: $e');
     }
-
-    canvas.restore();
   }
 
   void _drawTextItem(Canvas canvas, TextItem item, bool isGhost) {
@@ -121,19 +146,31 @@ class EditorCanvasPainter extends CustomPainter {
       final fillColor = isGhost ? item.paint.fillColor.withOpacity(0.1) : item.paint.fillColor;
       final textStyle = TextStyle(color: fillColor, fontSize: item.fontSize, fontWeight: item.isBold ? FontWeight.bold : FontWeight.normal);
 
+      canvas.save();
+      canvas.transform(item.transform.storage);
       if (item.paint.fillColor != Colors.transparent) {
         final textPainter = TextPainter(text: TextSpan(text: item.text, style: textStyle), textDirection: TextDirection.ltr);
         textPainter.layout();
         textPainter.paint(canvas, item.position);
       }
+      canvas.restore();
 
       final sWidth = isGhost ? (item.paint.strokeWidth == 0 ? 1.0 / cameraZoom : item.paint.strokeWidth) : item.paint.strokeWidth;
       if (sWidth > 0 || isGhost) {
+        // Inverse scaling stroke so matrix doesn't grow the thickness
+        final scaleX = item.transform.getRow(0).xyz.length;
+        final scaleY = item.transform.getRow(1).xyz.length;
+        final maxScale = math.max(scaleX, scaleY);
+        final effectiveStroke = sWidth / (maxScale == 0 ? 1 : maxScale);
+
+        canvas.save();
+        canvas.transform(item.transform.storage);
         final strokeColor = isGhost ? Colors.white.withOpacity(0.2) : item.paint.strokeColor;
-        final strokeStyle = textStyle.copyWith(foreground: Paint()..style = PaintingStyle.stroke..strokeWidth = sWidth..color = strokeColor);
+        final strokeStyle = textStyle.copyWith(foreground: Paint()..style = PaintingStyle.stroke..strokeWidth = effectiveStroke..color = strokeColor);
         final strokePainter = TextPainter(text: TextSpan(text: item.text, style: strokeStyle), textDirection: TextDirection.ltr);
         strokePainter.layout();
         strokePainter.paint(canvas, item.position);
+        canvas.restore();
       }
     } catch (e) {
       print('DEBUG ERROR: _drawTextItem failed for ${item.id}: $e');
@@ -147,12 +184,24 @@ class EditorCanvasPainter extends CustomPainter {
       final strokeColor = isGhost ? Colors.white.withOpacity(0.2) : item.paint.strokeColor;
       final sWidth = isGhost ? (item.paint.strokeWidth == 0 ? 1.0 / cameraZoom : item.paint.strokeWidth) : item.paint.strokeWidth;
 
-      for (int i = item.paint.extrusionSteps; i >= 0; i--) {
-        final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
-        final rrect = RRect.fromRectAndRadius(item.rect.shift(offset), Radius.circular(item.radius));
+      if (item.paint.fillColor != Colors.transparent) {
+        canvas.save();
+        canvas.transform(item.transform.storage);
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          final rrect = RRect.fromRectAndRadius(item.rect.shift(offset), Radius.circular(item.radius));
+          canvas.drawRRect(rrect, paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
+        }
+        canvas.restore();
+      }
 
-        if (item.paint.fillColor != Colors.transparent) canvas.drawRRect(rrect, paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
-        if (sWidth > 0 || isGhost) canvas.drawRRect(rrect, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+      if (sWidth > 0 || isGhost) {
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          final path = Path()..addRRect(RRect.fromRectAndRadius(item.rect.shift(offset), Radius.circular(item.radius)));
+          final transformedPath = path.transform(item.transform.storage);
+          canvas.drawPath(transformedPath, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+        }
       }
     } catch (e) {
       print('DEBUG ERROR: _drawRRectItem failed for ${item.id}: $e');
@@ -166,12 +215,23 @@ class EditorCanvasPainter extends CustomPainter {
       final strokeColor = isGhost ? Colors.white.withOpacity(0.2) : item.paint.strokeColor;
       final sWidth = isGhost ? (item.paint.strokeWidth == 0 ? 1.0 / cameraZoom : item.paint.strokeWidth) : item.paint.strokeWidth;
 
-      for (int i = item.paint.extrusionSteps; i >= 0; i--) {
-        final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
-        final rect = item.rect.shift(offset);
+      if (item.paint.fillColor != Colors.transparent) {
+        canvas.save();
+        canvas.transform(item.transform.storage);
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          canvas.drawOval(item.rect.shift(offset), paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
+        }
+        canvas.restore();
+      }
 
-        if (item.paint.fillColor != Colors.transparent) canvas.drawOval(rect, paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
-        if (sWidth > 0 || isGhost) canvas.drawOval(rect, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+      if (sWidth > 0 || isGhost) {
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          final path = Path()..addOval(item.rect.shift(offset));
+          final transformedPath = path.transform(item.transform.storage);
+          canvas.drawPath(transformedPath, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+        }
       }
     } catch (e) {
       print('DEBUG ERROR: _drawOvalItem failed for ${item.id}: $e');
@@ -185,12 +245,23 @@ class EditorCanvasPainter extends CustomPainter {
       final strokeColor = isGhost ? Colors.white.withOpacity(0.2) : item.paint.strokeColor;
       final sWidth = isGhost ? (item.paint.strokeWidth == 0 ? 1.0 / cameraZoom : item.paint.strokeWidth) : item.paint.strokeWidth;
 
-      for (int i = item.paint.extrusionSteps; i >= 0; i--) {
-        final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
-        final rect = item.rect.shift(offset);
+      if (item.paint.fillColor != Colors.transparent) {
+        canvas.save();
+        canvas.transform(item.transform.storage);
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          canvas.drawRect(item.rect.shift(offset), paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
+        }
+        canvas.restore();
+      }
 
-        if (item.paint.fillColor != Colors.transparent) canvas.drawRect(rect, paint..color = i == 0 ? fillColor : fillColor.withOpacity(isGhost ? 0.05 : 0.8)..style = PaintingStyle.fill);
-        if (sWidth > 0 || isGhost) canvas.drawRect(rect, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+      if (sWidth > 0 || isGhost) {
+        for (int i = item.paint.extrusionSteps; i >= 0; i--) {
+          final offset = Offset(item.paint.extrusionOffset.dx * i, item.paint.extrusionOffset.dy * i);
+          final path = Path()..addRect(item.rect.shift(offset));
+          final transformedPath = path.transform(item.transform.storage);
+          canvas.drawPath(transformedPath, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+        }
       }
     } catch (e) {
       print('DEBUG ERROR: _drawRectItem failed for ${item.id}: $e');
@@ -200,19 +271,27 @@ class EditorCanvasPainter extends CustomPainter {
   void _drawPathItem(Canvas canvas, PathItem item, bool isGhost) {
     try {
       final paint = Paint()..strokeCap = item.paint.strokeCap..blendMode = item.paint.blendMode;
-      final path = BezierPathData(nodes: item.nodes, isClosed: item.isClosed).generatePath();
+      final localPath = BezierPathData(nodes: item.nodes, isClosed: item.isClosed).generatePath();
       final fillColor = isGhost ? item.paint.fillColor.withOpacity(0.1) : item.paint.fillColor;
       final strokeColor = isGhost ? Colors.white.withOpacity(0.2) : item.paint.strokeColor;
       final sWidth = isGhost ? (item.paint.strokeWidth == 0 ? 1.0 / cameraZoom : item.paint.strokeWidth) : item.paint.strokeWidth;
 
-      if (item.paint.fillColor != Colors.transparent) canvas.drawPath(path, paint..color = fillColor..style = PaintingStyle.fill);
-      if (sWidth > 0 || isGhost) canvas.drawPath(path, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+      if (item.paint.fillColor != Colors.transparent) {
+        canvas.save();
+        canvas.transform(item.transform.storage);
+        canvas.drawPath(localPath, paint..color = fillColor..style = PaintingStyle.fill);
+        canvas.restore();
+      }
+
+      if (sWidth > 0 || isGhost) {
+        final transformedPath = localPath.transform(item.transform.storage);
+        canvas.drawPath(transformedPath, paint..color = strokeColor..style = PaintingStyle.stroke..strokeWidth = sWidth);
+      }
     } catch (e) {
       print('DEBUG ERROR: _drawPathItem failed for ${item.id}: $e');
     }
   }
 
-  // Helper to extract a single item's visual perimeter into a reusable Flutter Path
   Path _getItemLocalPath(CanvasItem item) {
     if (item is RectItem) return Path()..addRect(item.rect);
     if (item is RRectItem) return Path()..addRRect(RRect.fromRectAndRadius(item.rect, Radius.circular(item.radius)));
@@ -229,11 +308,8 @@ class EditorCanvasPainter extends CustomPainter {
   void _drawHoverHighlight(Canvas canvas, CanvasItem item) {
     try {
       final hoverPaint = Paint()..color = Colors.blue.withOpacity(0.7)..style = PaintingStyle.stroke..strokeWidth = 4 / cameraZoom;
-      
-      // Transform the local path to global space so the stroke scales uniformly without skewing
       Path localPath = _getItemLocalPath(item);
       Path globalPath = localPath.transform(item.transform.storage);
-      
       canvas.drawPath(globalPath, hoverPaint);
     } catch (e) {
       print('DEBUG ERROR: Hover highlight failed: $e');
@@ -262,17 +338,14 @@ class EditorCanvasPainter extends CustomPainter {
         final localRect = _getItemLocalRect(selectedItem);
         if (localRect == Rect.zero) return;
 
-        // Determine global rotated corners
         final tl = MatrixUtils.transformPoint(selectedItem.transform, localRect.topLeft);
         final tr = MatrixUtils.transformPoint(selectedItem.transform, localRect.topRight);
         final bl = MatrixUtils.transformPoint(selectedItem.transform, localRect.bottomLeft);
         final br = MatrixUtils.transformPoint(selectedItem.transform, localRect.bottomRight);
 
-        // Draw rotated bounding box
         final outlinePath = Path()..moveTo(tl.dx, tl.dy)..lineTo(tr.dx, tr.dy)..lineTo(br.dx, br.dy)..lineTo(bl.dx, bl.dy)..close();
         canvas.drawPath(outlinePath, Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = strokeW);
 
-        // Conditional Group Text
         if (selectedItem is LogicGroupItem && selectedItem.condition != 'true' && selectedItem.condition.trim().isNotEmpty) {
            final textPainter = TextPainter(
               text: TextSpan(text: 'if (${selectedItem.condition})', style: TextStyle(color: Colors.orangeAccent, fontSize: 12 / cameraZoom, fontWeight: FontWeight.bold, backgroundColor: Colors.black54)),
@@ -289,7 +362,6 @@ class EditorCanvasPainter extends CustomPainter {
           if (hoveredHandle == HandleType.rightEdge) canvas.drawLine(tr, br, edgePaint);
         }
 
-        // Only draw interactive scale handles if this is the ONLY item selected
         if (selectedItemIds.length == 1) {
           _drawNode(canvas, tl, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topLeft) ? nodeHoverFill : nodeFill);
           _drawNode(canvas, tr, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topRight) ? nodeHoverFill : nodeFill);
@@ -299,11 +371,8 @@ class EditorCanvasPainter extends CustomPainter {
       }
       else if (selectedItem is PathItem) {
         final path = BezierPathData(nodes: selectedItem.nodes, isClosed: selectedItem.isClosed).generatePath();
-        
-        // Transform the path outline to global space
         canvas.drawPath(path.transform(selectedItem.transform.storage), Paint()..color = Colors.blueAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 3.0 / cameraZoom);
           
-        // Highlight segment and display interactive "+" button
         if (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.pathEdge && hoveredNodeIndex != null) {
             int i = hoveredNodeIndex!;
             int nextIndex = (i + 1) % selectedItem.nodes.length;
@@ -338,7 +407,6 @@ class EditorCanvasPainter extends CustomPainter {
             var node = selectedItem.nodes[i];
             bool isHoveredNode = hoveredItemId == selectedItem.id && hoveredNodeIndex == i;
 
-            // Transform individual points for node handlers
             Offset gPos = MatrixUtils.transformPoint(selectedItem.transform, node.position);
 
             if (node.controlPoint1 != null) {
@@ -355,52 +423,44 @@ class EditorCanvasPainter extends CustomPainter {
           }
         }
       } 
-      // ----------------------------------------------------------------------
-      // Dedicated "Move" Handle positioned above the bounding box
-      // ----------------------------------------------------------------------
+
       if (selectedItemIds.length == 1) {
          final bounds = BoundingBoxUtils.getCombinedRect([selectedItem]);
          if (bounds != Rect.zero) {
-             // Float the handle 30 logical pixels above the top edge
              final moveHandlePos = Offset(bounds.center.dx, bounds.top - (30.0 / cameraZoom));
+             final rotateHandlePos = Offset(bounds.center.dx, bounds.top - (60.0 / cameraZoom)); // ROTATE HANDLE
+
              bool isHoveringMove = hoveredItemId == selectedItem.id && hoveredHandle == HandleType.move;
+             bool isHoveringRotate = hoveredItemId == selectedItem.id && hoveredHandle == HandleType.rotate;
 
              final moveHandlePaint = Paint()..color = isHoveringMove ? Colors.yellowAccent : Colors.white..style = PaintingStyle.fill;
-             final moveHandleStroke = Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 2.0 / cameraZoom;
+             final rotateHandlePaint = Paint()..color = isHoveringRotate ? Colors.yellowAccent : Colors.white..style = PaintingStyle.fill;
+             final stroke = Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 2.0 / cameraZoom;
 
-             // Draw connecting line from bounding box to the floating handle
-             canvas.drawLine(
-               Offset(bounds.center.dx, bounds.top), 
-               moveHandlePos, 
-               Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom
-             );
+             // Connecting Line
+             canvas.drawLine(Offset(bounds.center.dx, bounds.top), rotateHandlePos, Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom);
 
-             // Move Handle Base
+             // Move Handle
              canvas.drawCircle(moveHandlePos, 10.0 / cameraZoom, moveHandlePaint);
-             canvas.drawCircle(moveHandlePos, 10.0 / cameraZoom, moveHandleStroke);
-
-             // Crosshairs symbol to indicate "Move"
+             canvas.drawCircle(moveHandlePos, 10.0 / cameraZoom, stroke);
              final crosshairPaint = Paint()..color = const Color(0xFF1E1E1E)..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom..strokeCap = StrokeCap.round;
-             
              canvas.drawLine(moveHandlePos + Offset(-5.0 / cameraZoom, 0), moveHandlePos + Offset(5.0 / cameraZoom, 0), crosshairPaint);
              canvas.drawLine(moveHandlePos + Offset(0, -5.0 / cameraZoom), moveHandlePos + Offset(0, 5.0 / cameraZoom), crosshairPaint);
-             
-             // Arrow heads
              final arrowOffset = 2.0 / cameraZoom;
              final endOffset = 5.0 / cameraZoom;
-             
-             // Left
              canvas.drawLine(moveHandlePos + Offset(-endOffset, 0), moveHandlePos + Offset(-endOffset + arrowOffset, -arrowOffset), crosshairPaint);
              canvas.drawLine(moveHandlePos + Offset(-endOffset, 0), moveHandlePos + Offset(-endOffset + arrowOffset, arrowOffset), crosshairPaint);
-             // Right
              canvas.drawLine(moveHandlePos + Offset(endOffset, 0), moveHandlePos + Offset(endOffset - arrowOffset, -arrowOffset), crosshairPaint);
              canvas.drawLine(moveHandlePos + Offset(endOffset, 0), moveHandlePos + Offset(endOffset - arrowOffset, arrowOffset), crosshairPaint);
-             // Top
              canvas.drawLine(moveHandlePos + Offset(0, -endOffset), moveHandlePos + Offset(-arrowOffset, -endOffset + arrowOffset), crosshairPaint);
              canvas.drawLine(moveHandlePos + Offset(0, -endOffset), moveHandlePos + Offset(arrowOffset, -endOffset + arrowOffset), crosshairPaint);
-             // Bottom
              canvas.drawLine(moveHandlePos + Offset(0, endOffset), moveHandlePos + Offset(-arrowOffset, endOffset - arrowOffset), crosshairPaint);
              canvas.drawLine(moveHandlePos + Offset(0, endOffset), moveHandlePos + Offset(arrowOffset, endOffset - arrowOffset), crosshairPaint);
+
+             // Rotate Handle
+             canvas.drawCircle(rotateHandlePos, 8.0 / cameraZoom, rotateHandlePaint);
+             canvas.drawCircle(rotateHandlePos, 8.0 / cameraZoom, stroke);
+             canvas.drawCircle(rotateHandlePos, 3.0 / cameraZoom, Paint()..color = Colors.blueAccent..style = PaintingStyle.fill);
          }
       }
 
@@ -411,7 +471,6 @@ class EditorCanvasPainter extends CustomPainter {
 
   void _drawTransformBox(Canvas canvas, List<CanvasItem> selectedItems) {
     try {
-       // getCombinedRect handles all nested matrices and rotations perfectly now
        final Rect bounds = BoundingBoxUtils.getCombinedRect(selectedItems);
        if (bounds == Rect.zero) return;
 
