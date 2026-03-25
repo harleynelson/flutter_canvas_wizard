@@ -355,6 +355,55 @@ class EditorCanvasPainter extends CustomPainter {
           }
         }
       } 
+      // ----------------------------------------------------------------------
+      // Dedicated "Move" Handle positioned above the bounding box
+      // ----------------------------------------------------------------------
+      if (selectedItemIds.length == 1) {
+         final bounds = BoundingBoxUtils.getCombinedRect([selectedItem]);
+         if (bounds != Rect.zero) {
+             // Float the handle 30 logical pixels above the top edge
+             final moveHandlePos = Offset(bounds.center.dx, bounds.top - (30.0 / cameraZoom));
+             bool isHoveringMove = hoveredItemId == selectedItem.id && hoveredHandle == HandleType.move;
+
+             final moveHandlePaint = Paint()..color = isHoveringMove ? Colors.yellowAccent : Colors.white..style = PaintingStyle.fill;
+             final moveHandleStroke = Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 2.0 / cameraZoom;
+
+             // Draw connecting line from bounding box to the floating handle
+             canvas.drawLine(
+               Offset(bounds.center.dx, bounds.top), 
+               moveHandlePos, 
+               Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom
+             );
+
+             // Move Handle Base
+             canvas.drawCircle(moveHandlePos, 10.0 / cameraZoom, moveHandlePaint);
+             canvas.drawCircle(moveHandlePos, 10.0 / cameraZoom, moveHandleStroke);
+
+             // Crosshairs symbol to indicate "Move"
+             final crosshairPaint = Paint()..color = const Color(0xFF1E1E1E)..style = PaintingStyle.stroke..strokeWidth = 1.5 / cameraZoom..strokeCap = StrokeCap.round;
+             
+             canvas.drawLine(moveHandlePos + Offset(-5.0 / cameraZoom, 0), moveHandlePos + Offset(5.0 / cameraZoom, 0), crosshairPaint);
+             canvas.drawLine(moveHandlePos + Offset(0, -5.0 / cameraZoom), moveHandlePos + Offset(0, 5.0 / cameraZoom), crosshairPaint);
+             
+             // Arrow heads
+             final arrowOffset = 2.0 / cameraZoom;
+             final endOffset = 5.0 / cameraZoom;
+             
+             // Left
+             canvas.drawLine(moveHandlePos + Offset(-endOffset, 0), moveHandlePos + Offset(-endOffset + arrowOffset, -arrowOffset), crosshairPaint);
+             canvas.drawLine(moveHandlePos + Offset(-endOffset, 0), moveHandlePos + Offset(-endOffset + arrowOffset, arrowOffset), crosshairPaint);
+             // Right
+             canvas.drawLine(moveHandlePos + Offset(endOffset, 0), moveHandlePos + Offset(endOffset - arrowOffset, -arrowOffset), crosshairPaint);
+             canvas.drawLine(moveHandlePos + Offset(endOffset, 0), moveHandlePos + Offset(endOffset - arrowOffset, arrowOffset), crosshairPaint);
+             // Top
+             canvas.drawLine(moveHandlePos + Offset(0, -endOffset), moveHandlePos + Offset(-arrowOffset, -endOffset + arrowOffset), crosshairPaint);
+             canvas.drawLine(moveHandlePos + Offset(0, -endOffset), moveHandlePos + Offset(arrowOffset, -endOffset + arrowOffset), crosshairPaint);
+             // Bottom
+             canvas.drawLine(moveHandlePos + Offset(0, endOffset), moveHandlePos + Offset(-arrowOffset, endOffset - arrowOffset), crosshairPaint);
+             canvas.drawLine(moveHandlePos + Offset(0, endOffset), moveHandlePos + Offset(arrowOffset, endOffset - arrowOffset), crosshairPaint);
+         }
+      }
+
     } catch (e) {
        print('DEBUG ERROR: Selection highlight failed: $e');
     }

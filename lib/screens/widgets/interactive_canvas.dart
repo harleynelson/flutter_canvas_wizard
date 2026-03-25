@@ -197,6 +197,16 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
           final selectedItem = _findItemRecursive(workspace.items, workspace.selectedItemIds.first);
           if (selectedItem != null && selectedItem.isVisible && !_isItemGhosted(selectedItem, workspace)) {
             
+            // Dedicated "Move" Handle Hit Test (Above top boundary)
+            final bounds = BoundingBoxUtils.getCombinedRect([selectedItem]);
+            if (bounds != Rect.zero) {
+               // Float the handle 30 logical pixels above the top edge
+               final moveHandlePos = Offset(bounds.center.dx, bounds.top - (30.0 / _cameraZoom));
+               if ((logicalPos - moveHandlePos).distance <= (12.0 / _cameraZoom)) {
+                  return HitResult(itemId: selectedItem.id, handle: HandleType.move);
+               }
+            }
+
             // Handles testing for Rect/Oval/Text/Groups
             if (selectedItem is RectItem || selectedItem is RRectItem || selectedItem is OvalItem || selectedItem is TextItem || selectedItem is LogicGroupItem) {
               final localRect = _getItemLocalRect(selectedItem);
@@ -245,7 +255,6 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
             if (item is LogicGroupItem) {
               final childHit = hitTestRecursive(item.children, globalPos);
               if (childHit.itemId != null) return childHit;
-              // Note: Removed group bounds fallback here so you can click *through* empty space in groups
             } else {
               // INVERSE MATRIX: Transform screen mouse backwards into the shape's local space
               final inverse = Matrix4.tryInvert(item.transform) ?? Matrix4.identity();
@@ -281,7 +290,7 @@ class _InteractiveCanvasState extends ConsumerState<InteractiveCanvas> {
                           else if (item is OvalItem) innerPath.addOval(innerRect);
                           hit = !innerPath.contains(localPos);
                       } else {
-                          hit = true; // Shape is smaller than tolerance width
+                          hit = true; 
                       }
                    }
                 }
