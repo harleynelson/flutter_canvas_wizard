@@ -95,24 +95,25 @@ class _HierarchyNodeState extends ConsumerState<_HierarchyNode> {
                   onPressed: () {
                     try {
                       CanvasItem updatedItem;
+                      // FIXED: Included transform: i.transform below to prevent reverting to Matrix4.identity()
                       if (widget.item is RectItem) {
                         final i = widget.item as RectItem;
-                        updatedItem = RectItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, rect: i.rect);
+                        updatedItem = RectItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, rect: i.rect);
                       } else if (widget.item is RRectItem) {
                         final i = widget.item as RRectItem;
-                        updatedItem = RRectItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, rect: i.rect, radius: i.radius);
+                        updatedItem = RRectItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, rect: i.rect, radius: i.radius);
                       } else if (widget.item is OvalItem) {
                         final i = widget.item as OvalItem;
-                        updatedItem = OvalItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, rect: i.rect);
+                        updatedItem = OvalItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, rect: i.rect);
                       } else if (widget.item is PathItem) {
                         final i = widget.item as PathItem;
-                        updatedItem = PathItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, nodes: i.nodes, isClosed: i.isClosed);
+                        updatedItem = PathItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, nodes: i.nodes, isClosed: i.isClosed);
                       } else if (widget.item is TextItem) { 
                         final i = widget.item as TextItem;
-                        updatedItem = TextItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, text: i.text, position: i.position, fontSize: i.fontSize, isBold: i.isBold);
+                        updatedItem = TextItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, text: i.text, position: i.position, fontSize: i.fontSize, isBold: i.isBold);
                       } else if (widget.item is LogicGroupItem) {
                         final i = widget.item as LogicGroupItem;
-                        updatedItem = LogicGroupItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, condition: i.condition, children: i.children);
+                        updatedItem = LogicGroupItem(id: i.id, name: i.name, isVisible: !i.isVisible, enabledIf: i.enabledIf, paint: i.paint, transform: i.transform, condition: i.condition, children: i.children);
                       } else {
                         return;
                       }

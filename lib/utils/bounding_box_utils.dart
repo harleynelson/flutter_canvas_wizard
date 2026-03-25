@@ -1,11 +1,33 @@
 // File: lib/utils/bounding_box_utils.dart
-// Description: Utilities for calculating combined boundaries for multiple items.
+// Description: Utilities for calculating combined boundaries for multiple items, respecting affine transformations (rotation, scale).
 
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 import '../models/canvas_item.dart';
-import 'path_math.dart'; // Added import for path bounding boxes
+import 'path_math.dart'; 
 
 class BoundingBoxUtils {
+  /// Takes a local rect and a transformation matrix, and returns a new 
+  /// axis-aligned Rect that fully encloses the transformed corners.
+  static Rect _getTransformedRectBounds(Rect localRect, Matrix4 transform) {
+    try {
+      final tl = MatrixUtils.transformPoint(transform, localRect.topLeft);
+      final tr = MatrixUtils.transformPoint(transform, localRect.topRight);
+      final bl = MatrixUtils.transformPoint(transform, localRect.bottomLeft);
+      final br = MatrixUtils.transformPoint(transform, localRect.bottomRight);
+
+      double minX = math.min(math.min(tl.dx, tr.dx), math.min(bl.dx, br.dx));
+      double maxX = math.max(math.max(tl.dx, tr.dx), math.max(bl.dx, br.dx));
+      double minY = math.min(math.min(tl.dy, tr.dy), math.min(bl.dy, br.dy));
+      double maxY = math.max(math.max(tl.dy, tr.dy), math.max(bl.dy, br.dy));
+
+      return Rect.fromLTRB(minX, minY, maxX, maxY);
+    } catch (e) {
+      print('DEBUG ERROR: _getTransformedRectBounds failed: $e');
+      return localRect;
+    }
+  }
+
   static Rect getCombinedRect(List<CanvasItem> items) {
     if (items.isEmpty) return Rect.zero;
     
@@ -14,30 +36,30 @@ class BoundingBoxUtils {
 
     try {
       for (var item in items) {
-        Rect itemBounds = Rect.zero;
+        Rect localBounds = Rect.zero;
         
-        if (item is RectItem) {
-          itemBounds = item.rect;
-        } else if (item is RRectItem) {
-          itemBounds = item.rect;
-        } else if (item is OvalItem) {
-          itemBounds = item.rect;
-        } else if (item is PathItem) {
-          itemBounds = PathMath.getBoundingBox(item.nodes.map((n) => n.position).toList());
-        } else if (item is TextItem) {
-          // Rough approximation for bounding box without full TextPainter layout cost
+        if (item is RectItem) localBounds = item.rect;
+        else if (item is RRectItem) localBounds = item.rect;
+        else if (item is OvalItem) localBounds = item.rect;
+        else if (item is PathItem) localBounds = PathMath.getBoundingBox(item.nodes.map((n) => n.position).toList());
+        else if (item is TextItem) {
           final approxWidth = item.text.length * (item.fontSize * 0.6);
-          itemBounds = Rect.fromLTWH(item.position.dx, item.position.dy, approxWidth, item.fontSize * 1.2);
-        } else if (item is LogicGroupItem) {
-          itemBounds = getCombinedRect(item.children);
+          localBounds = Rect.fromLTWH(item.position.dx, item.position.dy, approxWidth, item.fontSize * 1.2);
+        } 
+        else if (item is LogicGroupItem) {
+          // A group's local bounds are the combined bounds of its children
+          localBounds = getCombinedRect(item.children);
         }
 
-        if (itemBounds != Rect.zero) {
+        if (localBounds != Rect.zero) {
+          // Apply the item's matrix to its local bounds to get its actual footprint in the current space
+          Rect transformedBounds = _getTransformedRectBounds(localBounds, item.transform);
+          
           if (first) {
-            combined = itemBounds;
+            combined = transformedBounds;
             first = false;
           } else {
-            combined = combined.expandToInclude(itemBounds);
+            combined = combined.expandToInclude(transformedBounds);
           }
         }
       }

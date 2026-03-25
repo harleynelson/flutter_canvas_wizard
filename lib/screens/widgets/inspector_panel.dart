@@ -54,7 +54,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
   @override
   Widget build(BuildContext context) {
     final workspace = ref.watch(workspaceProvider);
-    // FIXED: Safely grab the first selected item to edit
     final selectedId = workspace.selectedItemIds.isNotEmpty ? workspace.selectedItemIds.first : null;
 
     if (selectedId == null) {
@@ -90,17 +89,17 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
               const SizedBox(height: 8),
               _buildStringRow('Name', item.name, (val) {
                 if (item is RectItem) {
-                  _updateItem(RectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect), item);
+                  _updateItem(RectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
                 } else if (item is RRectItem) {
-                  _updateItem(RRectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: item.radius), item);
+                  _updateItem(RRectItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect, radius: item.radius), item);
                 } else if (item is OvalItem) {
-                  _updateItem(OvalItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect), item);
+                  _updateItem(OvalItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, rect: item.rect), item);
                 } else if (item is PathItem) {
-                  _updateItem(PathItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, nodes: item.nodes, isClosed: item.isClosed), item);
+                  _updateItem(PathItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed), item);
                 } else if (item is TextItem) {
-                  _updateItem(TextItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
+                  _updateItem(TextItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
                 } else if (item is LogicGroupItem) {
-                  _updateItem(LogicGroupItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, condition: item.condition, children: item.children), item);
+                  _updateItem(LogicGroupItem(id: item.id, name: val, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, condition: item.condition, children: item.children), item);
                 }
               }),
             ],
@@ -110,14 +109,10 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
         // --- TRANSFORM & SHAPE DATA ---
         if (item is RectItem || item is RRectItem || item is OvalItem || item is PathItem || item is TextItem)
           PropertyAccordion(
-            title: item is PathItem ? 'Path Nodes' : 'Transform & Data',
+            title: item is PathItem ? 'Transform & Path' : 'Transform & Data',
             initiallyExpanded: true,
             children: [
-              if (item is RectItem) _buildRectFields(item),
-              if (item is RRectItem) _buildRRectFields(item),
-              if (item is OvalItem) _buildOvalFields(item),
-              if (item is PathItem) _buildPathFields(item),
-              if (item is TextItem) _buildTextFields(item),
+              _buildUnifiedTransformFields(item),
             ],
           ),
 
@@ -183,7 +178,79 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
-  // --- PROGRESSIVE VISIBILITY UI ---
+  // FIXED: Replaces isolated _buildRectFields, etc. with a unified global edit utilizing TransformUtils and BoundingBoxUtils
+  Widget _buildUnifiedTransformFields(CanvasItem item) {
+    try {
+      final bounds = BoundingBoxUtils.getCombinedRect([item]);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildNumberRow('Global X', bounds.left, (val) {
+            final delta = val - bounds.left;
+            _updateItem(TransformUtils.translateItem(item, Offset(delta, 0)), item);
+          }),
+          _buildNumberRow('Global Y', bounds.top, (val) {
+            final delta = val - bounds.top;
+            _updateItem(TransformUtils.translateItem(item, Offset(0, delta)), item);
+          }),
+          _buildNumberRow('Width', bounds.width, (val) {
+            if (val <= 0) return;
+            final scaleX = bounds.width == 0 ? 1.0 : val / bounds.width;
+            _updateItem(TransformUtils.stretchItem(item, scaleX, 1.0, bounds.centerLeft), item);
+          }),
+          _buildNumberRow('Height', bounds.height, (val) {
+            if (val <= 0) return;
+            final scaleY = bounds.height == 0 ? 1.0 : val / bounds.height;
+            _updateItem(TransformUtils.stretchItem(item, 1.0, scaleY, bounds.topCenter), item);
+          }),
+          
+          const Divider(color: Colors.white12, height: 24),
+
+          // Shape-specific properties
+          if (item is RRectItem) ... [
+            InspectorSlider(
+              label: 'Corner Radius',
+              value: item.radius,
+              min: 0,
+              max: 100,
+              onChanged: (val) {
+                 _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: val, transform: item.transform), item);
+              },
+            ),
+          ],
+          if (item is PathItem) _buildPathFields(item),
+          if (item is TextItem) _buildTextSpecificFields(item),
+        ],
+      );
+    } catch (e) {
+      print('DEBUG ERROR: _buildUnifiedTransformFields failed: $e');
+      return const SizedBox.shrink();
+    }
+  }
+
+  Widget _buildTextSpecificFields(TextItem item) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildStringRow('String', item.text, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: val, fontSize: item.fontSize, isBold: item.isBold, transform: item.transform), item)),
+        const SizedBox(height: 8),
+        _buildNumberRow('Font Size', item.fontSize, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: item.text, fontSize: val, isBold: item.isBold, transform: item.transform), item)),
+        Row(
+          children: [
+            const Text('Font Weight', style: TextStyle(color: Colors.white70, fontSize: 13)),
+            const Spacer(),
+            const Text('Bold', style: TextStyle(color: Colors.white54, fontSize: 11)),
+            Switch(
+              value: item.isBold,
+              activeColor: Colors.blueAccent,
+              onChanged: (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: item.text, fontSize: item.fontSize, isBold: val, transform: item.transform), item),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _buildVisibilitySection(CanvasItem item) {
     bool hasCondition = item.enabledIf != null && item.enabledIf!.trim().isNotEmpty;
 
@@ -205,17 +272,17 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     void applyVisibility(String? newCondition) {
       final val = (newCondition == null || newCondition.trim().isEmpty) ? null : newCondition;
       if (item is RectItem) {
-        _updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, rect: item.rect), item);
+        _updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, rect: item.rect), item);
       } else if (item is RRectItem) {
-        _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, rect: item.rect, radius: item.radius), item);
+        _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, rect: item.rect, radius: item.radius), item);
       } else if (item is OvalItem) {
-        _updateItem(OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, rect: item.rect), item);
+        _updateItem(OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, rect: item.rect), item);
       } else if (item is PathItem) {
-        _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, nodes: item.nodes, isClosed: item.isClosed), item);
+        _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed), item);
       } else if (item is TextItem) {
-        _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
+        _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
       } else if (item is LogicGroupItem) {
-        _updateItem(LogicGroupItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, condition: item.condition, children: item.children), item);
+        _updateItem(LogicGroupItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: val, paint: item.paint, transform: item.transform, condition: item.condition, children: item.children), item);
       }
     }
 
@@ -375,98 +442,6 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
-  Widget _buildTextFields(TextItem item) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _buildStringRow('String', item.text, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: val, fontSize: item.fontSize, isBold: item.isBold), item)),
-        const SizedBox(height: 8),
-        _buildNumberRow('X Pos', item.position.dx, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: Offset(val, item.position.dy), text: item.text, fontSize: item.fontSize, isBold: item.isBold), item)),
-        _buildNumberRow('Y Pos', item.position.dy, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: Offset(item.position.dx, val), text: item.text, fontSize: item.fontSize, isBold: item.isBold), item)),
-        _buildNumberRow('Font Size', item.fontSize, (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: item.text, fontSize: val, isBold: item.isBold), item)),
-        Row(
-          children: [
-            const Text('Font Weight', style: TextStyle(color: Colors.white70, fontSize: 13)),
-            const Spacer(),
-            const Text('Bold', style: TextStyle(color: Colors.white54, fontSize: 11)),
-            Switch(
-              value: item.isBold,
-              activeColor: Colors.blueAccent,
-              onChanged: (val) => _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, position: item.position, text: item.text, fontSize: item.fontSize, isBold: val), item),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildRectFields(RectItem item) {
-    return Column(
-      children: [
-        _buildNumberRow('X Pos', item.rect.left, (val) {
-          _updateItem(RectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(val, item.rect.top, item.rect.width, item.rect.height)), item);
-        }),
-        _buildNumberRow('Y Pos', item.rect.top, (val) {
-          _updateItem(RectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, val, item.rect.width, item.rect.height)), item);
-        }),
-        _buildNumberRow('Width', item.rect.width, (val) {
-          _updateItem(RectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, val, item.rect.height)), item);
-        }),
-        _buildNumberRow('Height', item.rect.height, (val) {
-          _updateItem(RectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, item.rect.width, val)), item);
-        }),
-      ],
-    );
-  }
-
-  Widget _buildRRectFields(RRectItem item) {
-    return Column(
-      children: [
-        _buildNumberRow('X Pos', item.rect.left, (val) {
-          _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(val, item.rect.top, item.rect.width, item.rect.height), radius: item.radius), item);
-        }),
-        _buildNumberRow('Y Pos', item.rect.top, (val) {
-          _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, val, item.rect.width, item.rect.height), radius: item.radius), item);
-        }),
-        _buildNumberRow('Width', item.rect.width, (val) {
-          _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, val, item.rect.height), radius: item.radius), item);
-        }),
-        _buildNumberRow('Height', item.rect.height, (val) {
-          _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, item.rect.width, val), radius: item.radius), item);
-        }),
-        const SizedBox(height: 8),
-        InspectorSlider(
-          label: 'Corner Radius',
-          value: item.radius,
-          min: 0,
-          max: 100,
-          onChanged: (val) {
-             _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: item.rect, radius: val), item);
-          },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildOvalFields(OvalItem item) {
-    return Column(
-      children: [
-        _buildNumberRow('X Pos', item.rect.left, (val) {
-          _updateItem(OvalItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(val, item.rect.top, item.rect.width, item.rect.height)), item);
-        }),
-        _buildNumberRow('Y Pos', item.rect.top, (val) {
-          _updateItem(OvalItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, val, item.rect.width, item.rect.height)), item);
-        }),
-        _buildNumberRow('Width', item.rect.width, (val) {
-          _updateItem(OvalItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, val, item.rect.height)), item);
-        }),
-        _buildNumberRow('Height', item.rect.height, (val) {
-          _updateItem(OvalItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, rect: Rect.fromLTWH(item.rect.left, item.rect.top, item.rect.width, val)), item);
-        }),
-      ],
-    );
-  }
-
   Widget _buildPathFields(PathItem item) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -480,7 +455,7 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
               activeColor: Colors.blueAccent,
               onChanged: (val) {
                 try {
-                  _updateItem(PathItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, nodes: item.nodes, isClosed: val), item);
+                  _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: item.nodes, isClosed: val), item);
                 } catch (e) {
                   print('DEBUG ERROR: Toggle path closed failed: $e');
                 }
@@ -506,7 +481,7 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
                     onPressed: item.nodes.length > 1 ? () {
                       try {
                         final newNodes = List<PathNode>.from(item.nodes)..removeLast();
-                        _updateItem(PathItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, nodes: newNodes, isClosed: item.isClosed), item);
+                        _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: newNodes, isClosed: item.isClosed), item);
                       } catch (e) {
                         print('DEBUG ERROR: Remove node failed: $e');
                       }
@@ -527,7 +502,7 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
                             controlPoint2: lastNode.position + const Offset(60, 20),
                           )
                         );
-                        _updateItem(PathItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: item.paint, nodes: newNodes, isClosed: item.isClosed), item);
+                        _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: item.paint, transform: item.transform, nodes: newNodes, isClosed: item.isClosed), item);
                       } catch (e) {
                         print('DEBUG ERROR: Add node failed: $e');
                       }
@@ -579,17 +554,20 @@ class _InspectorPanelState extends ConsumerState<InspectorPanel> {
     );
   }
 
+  // FIXED: Preserving inherited bounds like visibility and transforms
   void _applyPaint(CanvasItem item, CanvasPaint newPaint) {
     if (item is RectItem) {
-      _updateItem(RectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: newPaint, rect: item.rect), item);
+      _updateItem(RectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect), item);
     } else if (item is RRectItem) {
-      _updateItem(RRectItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: newPaint, rect: item.rect, radius: item.radius), item);
+      _updateItem(RRectItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect, radius: item.radius), item);
     } else if (item is OvalItem) {
-      _updateItem(OvalItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: newPaint, rect: item.rect), item);
+      _updateItem(OvalItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, rect: item.rect), item);
     } else if (item is PathItem) {
-      _updateItem(PathItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: newPaint, nodes: item.nodes, isClosed: item.isClosed), item);
+      _updateItem(PathItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, nodes: item.nodes, isClosed: item.isClosed), item);
     } else if (item is TextItem) {
-      _updateItem(TextItem(id: item.id, name: item.name, enabledIf: item.enabledIf, paint: newPaint, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
+      _updateItem(TextItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, text: item.text, position: item.position, fontSize: item.fontSize, isBold: item.isBold), item);
+    } else if (item is LogicGroupItem) {
+      _updateItem(LogicGroupItem(id: item.id, name: item.name, isVisible: item.isVisible, enabledIf: item.enabledIf, paint: newPaint, transform: item.transform, condition: item.condition, children: item.children), item);
     }
   }
 

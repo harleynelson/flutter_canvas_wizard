@@ -1,5 +1,5 @@
 // File: lib/models/canvas_item.dart
-// Description: Core data models for serializing canvas shapes, paint properties, and custom export parameters.
+// Description: Core data models for serializing canvas shapes, paint properties, custom export parameters, and affine transformations.
 
 import 'package:flutter/material.dart';
 
@@ -41,7 +41,6 @@ class CanvasPaint {
   String? fillColorParam;
   String? strokeColorParam;
   
-  // Advanced Features
   StrokeCap strokeCap;
   BlendMode blendMode;
   int extrusionSteps; 
@@ -129,9 +128,10 @@ abstract class CanvasItem {
   String id;
   String name;
   bool isVisible;
-  String? enabledIf; // NEW: Expression string for conditional visibility (e.g., "stage >= 2")
+  String? enabledIf; 
   CanvasPaint paint;
   String type;
+  Matrix4 transform; // NEW: Global affine transformation matrix
 
   CanvasItem({
     required this.id,
@@ -140,7 +140,8 @@ abstract class CanvasItem {
     this.enabledIf,
     required this.paint,
     required this.type,
-  });
+    Matrix4? transform,
+  }) : transform = transform ?? Matrix4.identity();
 
   Map<String, dynamic> toJson() {
     try {
@@ -151,6 +152,7 @@ abstract class CanvasItem {
         'enabledIf': enabledIf,
         'paint': paint.toJson(),
         'type': type,
+        'transform': transform.storage.toList(), // Save matrix as flat List<double>
       };
     } catch (e) {
       print('DEBUG ERROR: CanvasItem.toJson base failed: $e');
@@ -185,26 +187,28 @@ abstract class CanvasItem {
       ); 
     }
   }
+
+  // Helper method to duplicate an item with a new transform matrix
+  CanvasItem copyWithTransform(Matrix4 newTransform);
 }
 
 class RectItem extends CanvasItem {
   Rect rect;
 
   RectItem({
-    required String id,
-    required String name,
-    bool isVisible = true,
-    String? enabledIf,
-    required CanvasPaint paint,
+    required super.id,
+    required super.name,
+    super.isVisible = true,
+    super.enabledIf,
+    required super.paint,
+    super.transform,
     required this.rect,
-  }) : super(
-          id: id,
-          name: name,
-          isVisible: isVisible,
-          enabledIf: enabledIf,
-          paint: paint,
-          type: 'rect',
-        );
+  }) : super(type: 'rect');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return RectItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, rect: rect, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
@@ -226,23 +230,21 @@ class RectItem extends CanvasItem {
   factory RectItem.fromJson(Map<String, dynamic> json) {
     try {
       final rectData = json['rect'] as Map<String, dynamic>;
-      final rect = Rect.fromLTRB(
-        (rectData['left'] ?? 0.0).toDouble(),
-        (rectData['top'] ?? 0.0).toDouble(),
-        (rectData['right'] ?? 0.0).toDouble(),
-        (rectData['bottom'] ?? 0.0).toDouble(),
-      );
-      
       return RectItem(
         id: json['id'] ?? '',
         name: json['name'] ?? 'Unnamed Rect',
         isVisible: json['isVisible'] ?? true,
         enabledIf: json['enabledIf'],
         paint: CanvasPaint.fromJson(json['paint'] ?? {}),
-        rect: rect,
+        transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
+        rect: Rect.fromLTRB(
+          (rectData['left'] ?? 0.0).toDouble(),
+          (rectData['top'] ?? 0.0).toDouble(),
+          (rectData['right'] ?? 0.0).toDouble(),
+          (rectData['bottom'] ?? 0.0).toDouble(),
+        ),
       );
     } catch (e) {
-      print('DEBUG ERROR: RectItem.fromJson failed: $e');
       return RectItem(id: 'err', name: 'Err', rect: Rect.zero, paint: CanvasPaint());
     }
   }
@@ -280,9 +282,15 @@ class PathItem extends CanvasItem {
     super.isVisible,
     super.enabledIf,
     required super.paint,
+    super.transform,
     required this.nodes,
     this.isClosed = true,
   }) : super(type: 'path');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return PathItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, nodes: nodes, isClosed: isClosed, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
@@ -299,6 +307,7 @@ class PathItem extends CanvasItem {
       isVisible: json['isVisible'] ?? true,
       enabledIf: json['enabledIf'],
       paint: CanvasPaint.fromJson(json['paint']),
+      transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
       isClosed: json['isClosed'] ?? true,
       nodes: (json['nodes'] as List).map((n) => PathNode.fromJson(n)).toList(),
     );
@@ -315,9 +324,15 @@ class LogicGroupItem extends CanvasItem {
     super.isVisible,
     super.enabledIf,
     required super.paint, 
+    super.transform,
     required this.condition,
     this.children = const [],
   }) : super(type: 'logic_group');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return LogicGroupItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, condition: condition, children: children, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
@@ -340,11 +355,11 @@ class LogicGroupItem extends CanvasItem {
         isVisible: json['isVisible'] ?? true,
         enabledIf: json['enabledIf'],
         paint: CanvasPaint.fromJson(json['paint'] ?? {}),
+        transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
         condition: json['condition'] ?? 'true',
         children: (json['children'] as List?)?.map((c) => CanvasItem.fromJson(c)).toList() ?? [],
       );
     } catch (e) {
-      print('DEBUG ERROR: LogicGroupItem.fromJson failed: $e');
       return LogicGroupItem(id: 'err', name: 'Err', condition: 'true', paint: CanvasPaint());
     }
   }
@@ -355,36 +370,29 @@ class RRectItem extends CanvasItem {
   double radius;
 
   RRectItem({
-    required String id,
-    required String name,
-    bool isVisible = true,
-    String? enabledIf,
-    required CanvasPaint paint,
+    required super.id,
+    required super.name,
+    super.isVisible = true,
+    super.enabledIf,
+    required super.paint,
+    super.transform,
     required this.rect,
     this.radius = 8.0,
-  }) : super(
-          id: id,
-          name: name,
-          isVisible: isVisible,
-          enabledIf: enabledIf,
-          paint: paint,
-          type: 'rrect',
-        );
+  }) : super(type: 'rrect');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return RRectItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, rect: rect, radius: radius, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
     try {
       final data = super.toJson();
-      data['rect'] = {
-        'left': rect.left,
-        'top': rect.top,
-        'right': rect.right,
-        'bottom': rect.bottom,
-      };
+      data['rect'] = {'left': rect.left, 'top': rect.top, 'right': rect.right, 'bottom': rect.bottom};
       data['radius'] = radius;
       return data;
     } catch (e) {
-      print('DEBUG ERROR: RRectItem.toJson failed: $e');
       return {};
     }
   }
@@ -392,61 +400,50 @@ class RRectItem extends CanvasItem {
   factory RRectItem.fromJson(Map<String, dynamic> json) {
     try {
       final rectData = json['rect'] as Map<String, dynamic>;
-      final rect = Rect.fromLTRB(
-        (rectData['left'] ?? 0.0).toDouble(),
-        (rectData['top'] ?? 0.0).toDouble(),
-        (rectData['right'] ?? 0.0).toDouble(),
-        (rectData['bottom'] ?? 0.0).toDouble(),
-      );
-      
       return RRectItem(
         id: json['id'] ?? '',
         name: json['name'] ?? 'Unnamed RRect',
         isVisible: json['isVisible'] ?? true,
         enabledIf: json['enabledIf'],
         paint: CanvasPaint.fromJson(json['paint'] ?? {}),
-        rect: rect,
+        transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
+        rect: Rect.fromLTRB(
+          (rectData['left'] ?? 0.0).toDouble(), (rectData['top'] ?? 0.0).toDouble(),
+          (rectData['right'] ?? 0.0).toDouble(), (rectData['bottom'] ?? 0.0).toDouble(),
+        ),
         radius: (json['radius'] ?? 8.0).toDouble(),
       );
     } catch (e) {
-      print('DEBUG ERROR: RRectItem.fromJson failed: $e');
       return RRectItem(id: 'err', name: 'Err', rect: Rect.zero, paint: CanvasPaint());
     }
   }
 }
 
 class OvalItem extends CanvasItem {
-  Rect rect; // Ovals are defined by their bounding box in Flutter
+  Rect rect; 
 
   OvalItem({
-    required String id,
-    required String name,
-    bool isVisible = true,
-    String? enabledIf,
-    required CanvasPaint paint,
+    required super.id,
+    required super.name,
+    super.isVisible = true,
+    super.enabledIf,
+    required super.paint,
+    super.transform,
     required this.rect,
-  }) : super(
-          id: id,
-          name: name,
-          isVisible: isVisible,
-          enabledIf: enabledIf,
-          paint: paint,
-          type: 'oval',
-        );
+  }) : super(type: 'oval');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return OvalItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, rect: rect, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
     try {
       final data = super.toJson();
-      data['rect'] = {
-        'left': rect.left,
-        'top': rect.top,
-        'right': rect.right,
-        'bottom': rect.bottom,
-      };
+      data['rect'] = {'left': rect.left, 'top': rect.top, 'right': rect.right, 'bottom': rect.bottom};
       return data;
     } catch (e) {
-      print('DEBUG ERROR: OvalItem.toJson failed: $e');
       return {};
     }
   }
@@ -454,23 +451,19 @@ class OvalItem extends CanvasItem {
   factory OvalItem.fromJson(Map<String, dynamic> json) {
     try {
       final rectData = json['rect'] as Map<String, dynamic>;
-      final rect = Rect.fromLTRB(
-        (rectData['left'] ?? 0.0).toDouble(),
-        (rectData['top'] ?? 0.0).toDouble(),
-        (rectData['right'] ?? 0.0).toDouble(),
-        (rectData['bottom'] ?? 0.0).toDouble(),
-      );
-      
       return OvalItem(
         id: json['id'] ?? '',
         name: json['name'] ?? 'Unnamed Oval',
         isVisible: json['isVisible'] ?? true,
         enabledIf: json['enabledIf'],
         paint: CanvasPaint.fromJson(json['paint'] ?? {}),
-        rect: rect,
+        transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
+        rect: Rect.fromLTRB(
+          (rectData['left'] ?? 0.0).toDouble(), (rectData['top'] ?? 0.0).toDouble(),
+          (rectData['right'] ?? 0.0).toDouble(), (rectData['bottom'] ?? 0.0).toDouble(),
+        ),
       );
     } catch (e) {
-      print('DEBUG ERROR: OvalItem.fromJson failed: $e');
       return OvalItem(id: 'err', name: 'Err', rect: Rect.zero, paint: CanvasPaint());
     }
   }
@@ -483,23 +476,22 @@ class TextItem extends CanvasItem {
   bool isBold;
 
   TextItem({
-    required String id,
-    required String name,
-    bool isVisible = true,
-    String? enabledIf,
-    required CanvasPaint paint,
+    required super.id,
+    required super.name,
+    super.isVisible = true,
+    super.enabledIf,
+    required super.paint,
+    super.transform,
     required this.text,
     required this.position,
     this.fontSize = 24.0,
     this.isBold = false,
-  }) : super(
-          id: id,
-          name: name,
-          isVisible: isVisible,
-          enabledIf: enabledIf,
-          paint: paint,
-          type: 'text',
-        );
+  }) : super(type: 'text');
+
+  @override
+  CanvasItem copyWithTransform(Matrix4 newTransform) {
+    return TextItem(id: id, name: name, isVisible: isVisible, enabledIf: enabledIf, paint: paint, text: text, position: position, fontSize: fontSize, isBold: isBold, transform: newTransform);
+  }
 
   @override
   Map<String, dynamic> toJson() {
@@ -511,7 +503,6 @@ class TextItem extends CanvasItem {
       data['isBold'] = isBold;
       return data;
     } catch (e) {
-      print('DEBUG ERROR: TextItem.toJson failed: $e');
       return {};
     }
   }
@@ -524,6 +515,7 @@ class TextItem extends CanvasItem {
         isVisible: json['isVisible'] ?? true,
         enabledIf: json['enabledIf'],
         paint: CanvasPaint.fromJson(json['paint'] ?? {}),
+        transform: json['transform'] != null ? Matrix4.fromList(List<double>.from(json['transform'])) : Matrix4.identity(),
         text: json['text'] ?? 'New Text',
         position: Offset(
           (json['position']?['dx'] ?? 0.0).toDouble(),
@@ -533,7 +525,6 @@ class TextItem extends CanvasItem {
         isBold: json['isBold'] ?? false,
       );
     } catch (e) {
-      print('DEBUG ERROR: TextItem.fromJson failed: $e');
       return TextItem(id: 'err', name: 'Err', text: 'Error', position: Offset.zero, paint: CanvasPaint());
     }
   }

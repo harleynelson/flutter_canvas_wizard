@@ -1,5 +1,5 @@
 // File: lib/screens/widgets/canvas_renderer.dart
-// Description: Renders the models and overlays interactive editing elements, now with Ghosting and Multi-select support.
+// Description: Renders the models applying their Matrix4 transformations, and overlays rotated interactive highlighting elements.
 
 import 'package:flutter/material.dart';
 import '../../models/canvas_item.dart';
@@ -7,25 +7,23 @@ import '../../models/geometry/bezier_path_data.dart';
 import '../../utils/bounding_box_utils.dart'; 
 import '../../utils/expression_evaluator.dart';
 import 'interactive_canvas.dart'; 
+import '../../utils/path_math.dart'; // Added for PathMath.getBoundingBox
 
 class EditorCanvasPainter extends CustomPainter {
   final List<CanvasItem> items;
-  final Set<String> selectedItemIds; // NEW: Multi-select support
+  final Set<String> selectedItemIds;
   final String? hoveredItemId;
   final HandleType hoveredHandle;
   final Offset? hoverPos;
   final int? hoveredNodeIndex; 
   final double gridSnapSize;
   
-  // Camera & Global State
   final Offset cameraPan;
   final double cameraZoom;
   final bool isTransformMode;
   final Map<String, double> variables;
   
-  // Marquee State
   final Rect? marqueeRect; 
-  
   final bool isExportMode;
 
   EditorCanvasPainter({
@@ -57,6 +55,7 @@ class EditorCanvasPainter extends CustomPainter {
         _drawOriginAxis(canvas, size);
       }
 
+      // Draw all items recursively using matrix injection
       for (var item in items) {
         _renderItem(canvas, item, inheritedGhost: false);
       }
@@ -70,15 +69,14 @@ class EditorCanvasPainter extends CustomPainter {
         final selectedItems = _findItemsRecursive(items, selectedItemIds);
         if (selectedItems.isNotEmpty) {
           if (isTransformMode) {
-             _drawTransformBox(canvas, selectedItems); // Draw one big box
+             _drawTransformBox(canvas, selectedItems); 
           } else {
              for (var item in selectedItems) {
-               _drawSelectionHighlight(canvas, item); // Draw individual highlights
+               _drawSelectionHighlight(canvas, item);
              }
           }
         }
         
-        // Draw Marquee
         if (marqueeRect != null) {
           final paintFill = Paint()..color = Colors.blueAccent.withOpacity(0.2)..style = PaintingStyle.fill;
           final paintStroke = Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = 1.0 / cameraZoom;
@@ -97,6 +95,11 @@ class EditorCanvasPainter extends CustomPainter {
     if (!item.isVisible) return;
     bool isGhost = inheritedGhost || !ExpressionEvaluator.evaluate(item.enabledIf, variables);
 
+    canvas.save();
+    
+    // THE MAGIC: We apply the item's specific affine transformation matrix
+    canvas.transform(item.transform.storage);
+
     try {
       if (item is RectItem) _drawRectItem(canvas, item, isGhost);
       else if (item is RRectItem) _drawRRectItem(canvas, item, isGhost);
@@ -109,6 +112,8 @@ class EditorCanvasPainter extends CustomPainter {
     } catch (e) {
       print('DEBUG ERROR: _renderItem failed for ${item.id}: $e');
     }
+
+    canvas.restore();
   }
 
   void _drawTextItem(Canvas canvas, TextItem item, bool isGhost) {
@@ -207,9 +212,157 @@ class EditorCanvasPainter extends CustomPainter {
     }
   }
 
-  // Updated to combine bounding box of ALL selected items
+  // Helper to extract a single item's visual perimeter into a reusable Flutter Path
+  Path _getItemLocalPath(CanvasItem item) {
+    if (item is RectItem) return Path()..addRect(item.rect);
+    if (item is RRectItem) return Path()..addRRect(RRect.fromRectAndRadius(item.rect, Radius.circular(item.radius)));
+    if (item is OvalItem) return Path()..addOval(item.rect);
+    if (item is PathItem) return BezierPathData(nodes: item.nodes, isClosed: item.isClosed).generatePath();
+    if (item is TextItem) {
+       final approxWidth = item.text.length * (item.fontSize * 0.6);
+       return Path()..addRect(Rect.fromLTWH(item.position.dx, item.position.dy, approxWidth, item.fontSize * 1.2));
+    }
+    if (item is LogicGroupItem && item.children.isNotEmpty) return Path()..addRect(BoundingBoxUtils.getCombinedRect(item.children));
+    return Path();
+  }
+
+  void _drawHoverHighlight(Canvas canvas, CanvasItem item) {
+    try {
+      final hoverPaint = Paint()..color = Colors.blue.withOpacity(0.7)..style = PaintingStyle.stroke..strokeWidth = 4 / cameraZoom;
+      
+      // Transform the local path to global space so the stroke scales uniformly without skewing
+      Path localPath = _getItemLocalPath(item);
+      Path globalPath = localPath.transform(item.transform.storage);
+      
+      canvas.drawPath(globalPath, hoverPaint);
+    } catch (e) {
+      print('DEBUG ERROR: Hover highlight failed: $e');
+    }
+  }
+
+  Rect _getItemLocalRect(CanvasItem item) {
+    if (item is RectItem) return item.rect;
+    if (item is RRectItem) return item.rect;
+    if (item is OvalItem) return item.rect;
+    if (item is TextItem) return Rect.fromLTWH(item.position.dx, item.position.dy, item.text.length * (item.fontSize * 0.6), item.fontSize * 1.2);
+    if (item is LogicGroupItem) return BoundingBoxUtils.getCombinedRect(item.children);
+    return Rect.zero;
+  }
+
+  void _drawSelectionHighlight(Canvas canvas, CanvasItem selectedItem) {
+    try {
+      final strokeW = 2.0 / cameraZoom;
+      final nodeFill = Paint()..color = Colors.white..style = PaintingStyle.fill;
+      final nodeHoverFill = Paint()..color = Colors.yellowAccent..style = PaintingStyle.fill;
+      final handleFill1 = Paint()..color = Colors.orangeAccent..style = PaintingStyle.fill; 
+      final handleFill2 = Paint()..color = Colors.blueAccent..style = PaintingStyle.fill;   
+      final linePaint = Paint()..color = Colors.blueAccent.withOpacity(0.5)..strokeWidth = 1.0 / cameraZoom;
+
+      if (selectedItem is RectItem || selectedItem is RRectItem || selectedItem is OvalItem || selectedItem is TextItem || selectedItem is LogicGroupItem) {
+        final localRect = _getItemLocalRect(selectedItem);
+        if (localRect == Rect.zero) return;
+
+        // Determine global rotated corners
+        final tl = MatrixUtils.transformPoint(selectedItem.transform, localRect.topLeft);
+        final tr = MatrixUtils.transformPoint(selectedItem.transform, localRect.topRight);
+        final bl = MatrixUtils.transformPoint(selectedItem.transform, localRect.bottomLeft);
+        final br = MatrixUtils.transformPoint(selectedItem.transform, localRect.bottomRight);
+
+        // Draw rotated bounding box
+        final outlinePath = Path()..moveTo(tl.dx, tl.dy)..lineTo(tr.dx, tr.dy)..lineTo(br.dx, br.dy)..lineTo(bl.dx, bl.dy)..close();
+        canvas.drawPath(outlinePath, Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = strokeW);
+
+        // Conditional Group Text
+        if (selectedItem is LogicGroupItem && selectedItem.condition != 'true' && selectedItem.condition.trim().isNotEmpty) {
+           final textPainter = TextPainter(
+              text: TextSpan(text: 'if (${selectedItem.condition})', style: TextStyle(color: Colors.orangeAccent, fontSize: 12 / cameraZoom, fontWeight: FontWeight.bold, backgroundColor: Colors.black54)),
+              textDirection: TextDirection.ltr,
+            )..layout();
+            textPainter.paint(canvas, Offset(tl.dx, tl.dy - (18.0 / cameraZoom)));
+        }
+
+        if (hoveredItemId == selectedItem.id) {
+          final edgePaint = Paint()..color = Colors.yellowAccent..style = PaintingStyle.stroke..strokeWidth = 3 / cameraZoom;
+          if (hoveredHandle == HandleType.topEdge) canvas.drawLine(tl, tr, edgePaint);
+          if (hoveredHandle == HandleType.bottomEdge) canvas.drawLine(bl, br, edgePaint);
+          if (hoveredHandle == HandleType.leftEdge) canvas.drawLine(tl, bl, edgePaint);
+          if (hoveredHandle == HandleType.rightEdge) canvas.drawLine(tr, br, edgePaint);
+        }
+
+        // Only draw interactive scale handles if this is the ONLY item selected
+        if (selectedItemIds.length == 1) {
+          _drawNode(canvas, tl, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topLeft) ? nodeHoverFill : nodeFill);
+          _drawNode(canvas, tr, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topRight) ? nodeHoverFill : nodeFill);
+          _drawNode(canvas, bl, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.bottomLeft) ? nodeHoverFill : nodeFill);
+          _drawNode(canvas, br, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.bottomRight) ? nodeHoverFill : nodeFill);
+        }
+      }
+      else if (selectedItem is PathItem) {
+        final path = BezierPathData(nodes: selectedItem.nodes, isClosed: selectedItem.isClosed).generatePath();
+        
+        // Transform the path outline to global space
+        canvas.drawPath(path.transform(selectedItem.transform.storage), Paint()..color = Colors.blueAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 3.0 / cameraZoom);
+          
+        // Highlight segment and display interactive "+" button
+        if (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.pathEdge && hoveredNodeIndex != null) {
+            int i = hoveredNodeIndex!;
+            int nextIndex = (i + 1) % selectedItem.nodes.length;
+            
+            final start = selectedItem.nodes[i];
+            final end = selectedItem.nodes[nextIndex];
+            
+            final segmentPath = Path()..moveTo(start.position.dx, start.position.dy);
+            if (start.controlPoint2 != null && end.controlPoint1 != null) {
+               segmentPath.cubicTo(start.controlPoint2!.dx, start.controlPoint2!.dy, end.controlPoint1!.dx, end.controlPoint1!.dy, end.position.dx, end.position.dy);
+            } else if (start.controlPoint2 != null || end.controlPoint1 != null) {
+               final cp = start.controlPoint2 ?? end.controlPoint1!;
+               segmentPath.quadraticBezierTo(cp.dx, cp.dy, end.position.dx, end.position.dy);
+            } else {
+               segmentPath.lineTo(end.position.dx, end.position.dy);
+            }
+            
+            canvas.drawPath(segmentPath.transform(selectedItem.transform.storage), Paint()..color = Colors.greenAccent..style = PaintingStyle.stroke..strokeWidth = 4.0 / cameraZoom);
+            
+            if (hoverPos != null) {
+               final addPaint = Paint()..color = Colors.greenAccent..style = PaintingStyle.fill;
+               canvas.drawCircle(hoverPos!, 7.0 / cameraZoom, addPaint);
+               
+               final plusStroke = Paint()..color = const Color(0xFF1E1E1E)..style = PaintingStyle.stroke..strokeWidth = 2.0 / cameraZoom..strokeCap = StrokeCap.round;
+               canvas.drawLine(hoverPos! + Offset(-3.5/cameraZoom, 0), hoverPos! + Offset(3.5/cameraZoom, 0), plusStroke);
+               canvas.drawLine(hoverPos! + Offset(0, -3.5/cameraZoom), hoverPos! + Offset(0, 3.5/cameraZoom), plusStroke);
+            }
+        }
+
+        if (selectedItemIds.length == 1) {
+          for (int i = 0; i < selectedItem.nodes.length; i++) {
+            var node = selectedItem.nodes[i];
+            bool isHoveredNode = hoveredItemId == selectedItem.id && hoveredNodeIndex == i;
+
+            // Transform individual points for node handlers
+            Offset gPos = MatrixUtils.transformPoint(selectedItem.transform, node.position);
+
+            if (node.controlPoint1 != null) {
+              Offset gCp1 = MatrixUtils.transformPoint(selectedItem.transform, node.controlPoint1!);
+              canvas.drawLine(gPos, gCp1, linePaint);
+              _drawNode(canvas, gCp1, (isHoveredNode && hoveredHandle == HandleType.pathControl1) ? nodeHoverFill : handleFill1, isCircle: true);
+            }
+            if (node.controlPoint2 != null) {
+              Offset gCp2 = MatrixUtils.transformPoint(selectedItem.transform, node.controlPoint2!);
+              canvas.drawLine(gPos, gCp2, linePaint);
+              _drawNode(canvas, gCp2, (isHoveredNode && hoveredHandle == HandleType.pathControl2) ? nodeHoverFill : handleFill2, isCircle: true);
+            }
+            _drawNode(canvas, gPos, (isHoveredNode && hoveredHandle == HandleType.pathNode) ? nodeHoverFill : nodeFill);
+          }
+        }
+      } 
+    } catch (e) {
+       print('DEBUG ERROR: Selection highlight failed: $e');
+    }
+  }
+
   void _drawTransformBox(Canvas canvas, List<CanvasItem> selectedItems) {
     try {
+       // getCombinedRect handles all nested matrices and rotations perfectly now
        final Rect bounds = BoundingBoxUtils.getCombinedRect(selectedItems);
        if (bounds == Rect.zero) return;
 
@@ -231,6 +384,15 @@ class EditorCanvasPainter extends CustomPainter {
 
     } catch (e) {
        print('DEBUG ERROR: _drawTransformBox failed: $e');
+    }
+  }
+
+  void _drawNode(Canvas canvas, Offset center, Paint paint, {bool isCircle = false}) {
+    final radius = 4.0 / cameraZoom;
+    if (isCircle) {
+      canvas.drawCircle(center, radius, paint);
+    } else {
+      canvas.drawRect(Rect.fromCenter(center: center, width: radius * 2, height: radius * 2), paint);
     }
   }
 
@@ -327,111 +489,6 @@ class EditorCanvasPainter extends CustomPainter {
       }
     } catch (e) {
       print('DEBUG ERROR: _drawOriginAxis failed: $e');
-    }
-  }
-
-  void _drawHoverHighlight(Canvas canvas, CanvasItem item) {
-    try {
-      final hoverPaint = Paint()..color = Colors.white.withOpacity(0.3)..style = PaintingStyle.stroke..strokeWidth = 4 / cameraZoom;
-        
-      if (item is RectItem) canvas.drawRect(item.rect, hoverPaint);
-      else if (item is RRectItem) canvas.drawRRect(RRect.fromRectAndRadius(item.rect, Radius.circular(item.radius)), hoverPaint);
-      else if (item is OvalItem) canvas.drawOval(item.rect, hoverPaint);
-      else if (item is PathItem) canvas.drawPath(BezierPathData(nodes: item.nodes, isClosed: item.isClosed).generatePath(), hoverPaint);
-      else if (item is LogicGroupItem && item.children.isNotEmpty) {
-        final rect = BoundingBoxUtils.getCombinedRect(item.children);
-        if (rect != Rect.zero) canvas.drawRect(rect.inflate(8.0), hoverPaint);
-      }
-    } catch (e) {
-      print('DEBUG ERROR: Hover highlight failed: $e');
-    }
-  }
-
-  void _drawSelectionHighlight(Canvas canvas, CanvasItem selectedItem) {
-    try {
-      final strokeW = 2.0 / cameraZoom;
-      final nodeFill = Paint()..color = Colors.white..style = PaintingStyle.fill;
-      final nodeHoverFill = Paint()..color = Colors.yellowAccent..style = PaintingStyle.fill;
-      final handleFill1 = Paint()..color = Colors.orangeAccent..style = PaintingStyle.fill; 
-      final handleFill2 = Paint()..color = Colors.blueAccent..style = PaintingStyle.fill;   
-      final linePaint = Paint()..color = Colors.blueAccent.withOpacity(0.5)..strokeWidth = 1.0 / cameraZoom;
-
-      if (selectedItem is RectItem || selectedItem is RRectItem || selectedItem is OvalItem) {
-        Rect baseRect = Rect.zero;
-        if (selectedItem is RectItem) {
-          baseRect = selectedItem.rect;
-          canvas.drawRect(baseRect, Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = strokeW);
-        } else if (selectedItem is RRectItem) {
-          baseRect = selectedItem.rect;
-          canvas.drawRRect(RRect.fromRectAndRadius(baseRect, Radius.circular(selectedItem.radius)), Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = strokeW);
-        } else if (selectedItem is OvalItem) {
-          baseRect = selectedItem.rect;
-          canvas.drawOval(baseRect, Paint()..color = Colors.blueAccent..style = PaintingStyle.stroke..strokeWidth = strokeW);
-        }
-        
-        if (hoveredItemId == selectedItem.id) {
-          final edgePaint = Paint()..color = Colors.yellowAccent..style = PaintingStyle.stroke..strokeWidth = 3 / cameraZoom;
-          if (hoveredHandle == HandleType.topEdge) canvas.drawLine(baseRect.topLeft, baseRect.topRight, edgePaint);
-          if (hoveredHandle == HandleType.bottomEdge) canvas.drawLine(baseRect.bottomLeft, baseRect.bottomRight, edgePaint);
-          if (hoveredHandle == HandleType.leftEdge) canvas.drawLine(baseRect.topLeft, baseRect.bottomLeft, edgePaint);
-          if (hoveredHandle == HandleType.rightEdge) canvas.drawLine(baseRect.topRight, baseRect.bottomRight, edgePaint);
-        }
-
-        // Only draw interactive nodes if this is the ONLY item selected
-        if (selectedItemIds.length == 1) {
-          _drawNode(canvas, baseRect.topLeft, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topLeft) ? nodeHoverFill : nodeFill);
-          _drawNode(canvas, baseRect.topRight, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.topRight) ? nodeHoverFill : nodeFill);
-          _drawNode(canvas, baseRect.bottomLeft, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.bottomLeft) ? nodeHoverFill : nodeFill);
-          _drawNode(canvas, baseRect.bottomRight, (hoveredItemId == selectedItem.id && hoveredHandle == HandleType.bottomRight) ? nodeHoverFill : nodeFill);
-        }
-      }
-      else if (selectedItem is PathItem) {
-        final path = BezierPathData(nodes: selectedItem.nodes, isClosed: selectedItem.isClosed).generatePath();
-        canvas.drawPath(path, Paint()..color = Colors.blueAccent.withOpacity(0.4)..style = PaintingStyle.stroke..strokeWidth = 3.0 / cameraZoom);
-          
-        if (selectedItemIds.length == 1) {
-          for (int i = 0; i < selectedItem.nodes.length; i++) {
-            var node = selectedItem.nodes[i];
-            bool isHoveredNode = hoveredItemId == selectedItem.id && hoveredNodeIndex == i;
-
-            if (node.controlPoint1 != null) {
-              canvas.drawLine(node.position, node.controlPoint1!, linePaint);
-              _drawNode(canvas, node.controlPoint1!, (isHoveredNode && hoveredHandle == HandleType.pathControl1) ? nodeHoverFill : handleFill1, isCircle: true);
-            }
-            if (node.controlPoint2 != null) {
-              canvas.drawLine(node.position, node.controlPoint2!, linePaint);
-              _drawNode(canvas, node.controlPoint2!, (isHoveredNode && hoveredHandle == HandleType.pathControl2) ? nodeHoverFill : handleFill2, isCircle: true);
-            }
-            _drawNode(canvas, node.position, (isHoveredNode && hoveredHandle == HandleType.pathNode) ? nodeHoverFill : nodeFill);
-          }
-        }
-      } 
-      else if (selectedItem is LogicGroupItem && selectedItem.children.isNotEmpty) {
-        final rect = BoundingBoxUtils.getCombinedRect(selectedItem.children);
-        if (rect != Rect.zero) {
-          final paddedRect = rect.inflate(8.0 / cameraZoom);
-          canvas.drawRect(paddedRect, Paint()..color = Colors.orangeAccent..style = PaintingStyle.stroke..strokeWidth = 2.0 / cameraZoom);
-
-          if (selectedItem.condition != 'true' && selectedItem.condition.trim().isNotEmpty) {
-            final textPainter = TextPainter(
-              text: TextSpan(text: 'if (${selectedItem.condition})', style: TextStyle(color: Colors.orangeAccent, fontSize: 12 / cameraZoom, fontWeight: FontWeight.bold, backgroundColor: Colors.black54)),
-              textDirection: TextDirection.ltr,
-            )..layout();
-            textPainter.paint(canvas, Offset(paddedRect.left, paddedRect.top - (18.0 / cameraZoom)));
-          }
-        }
-      }
-    } catch (e) {
-       print('DEBUG ERROR: Selection highlight failed: $e');
-    }
-  }
-
-  void _drawNode(Canvas canvas, Offset center, Paint paint, {bool isCircle = false}) {
-    final radius = 4.0 / cameraZoom;
-    if (isCircle) {
-      canvas.drawCircle(center, radius, paint);
-    } else {
-      canvas.drawRect(Rect.fromCenter(center: center, width: radius * 2, height: radius * 2), paint);
     }
   }
 
